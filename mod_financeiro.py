@@ -3,7 +3,7 @@ import pandas as pd
 from datetime import datetime, date
 from styles import page_header, metric_card
 from database import (
-    get_faturamento, atualizar_faturamento, deletar_faturamento,
+    get_faturamento, inserir_faturamento, atualizar_faturamento, deletar_faturamento,
     get_custos, inserir_custo, atualizar_custo, deletar_custo
 )
 
@@ -23,15 +23,73 @@ def render():
 
 def _render_faturamento():
     st.markdown("#### 📈 Tabela de Faturamento")
-    st.caption("Faturamento gerado automaticamente pelas notas de saída. Valores editáveis.")
+    st.caption("Faturamento gerado automaticamente pelas notas de saída e lançamentos manuais. Valores editáveis.")
     
+    # --- Formulário para lançamento manual ---
+    st.markdown("##### ➕ Novo Lançamento de Faturamento")
+    with st.form("form_novo_faturamento"):
+        col1, col2, col3 = st.columns([2, 3, 2])
+        with col1:
+            fat_data = st.date_input("Data", value=date.today(), key="fat_data_novo")
+        with col2:
+            fat_desc = st.text_input("Descrição", placeholder="Ex: Entrega avulsa - Cliente X", key="fat_desc_novo")
+        with col3:
+            fat_cliente = st.text_input("Cliente", placeholder="Nome do cliente", key="fat_cliente_novo")
+        
+        col4, col5, col6, col7 = st.columns([2, 2, 2, 2])
+        with col4:
+            fat_regiao = st.text_input("Região", placeholder="Ex: R2 - Zona Sul", key="fat_regiao_novo")
+        with col5:
+            fat_veiculo = st.selectbox("Veículo", options=["Motoboy", "Carro", "Van", "Outro"], key="fat_veiculo_novo")
+        with col6:
+            fat_valor = st.number_input("Valor (R$)", min_value=0.0, step=10.0, format="%.2f", key="fat_valor_novo")
+        with col7:
+            fat_cep = st.text_input("CEP", placeholder="00000-000", key="fat_cep_novo")
+        
+        col8, col9 = st.columns(2)
+        with col8:
+            fat_bairro = st.text_input("Bairro", placeholder="Bairro", key="fat_bairro_novo")
+        with col9:
+            fat_municipio = st.text_input("Município", placeholder="Município", key="fat_municipio_novo")
+        
+        submit_fat = st.form_submit_button("➕ Adicionar Faturamento", type="primary", use_container_width=True)
+        
+        if submit_fat:
+            if not fat_desc:
+                st.error("❌ Informe a descrição do faturamento.")
+            elif fat_valor <= 0:
+                st.error("❌ O valor deve ser maior que zero.")
+            else:
+                inserir_faturamento(
+                    nota_id=None,
+                    data=fat_data.strftime("%d/%m/%Y"),
+                    descricao=fat_desc,
+                    regiao=fat_regiao,
+                    veiculo=fat_veiculo,
+                    valor=fat_valor,
+                    cep=fat_cep,
+                    bairro=fat_bairro,
+                    municipio=fat_municipio,
+                    cliente=fat_cliente
+                )
+                st.success("✅ Faturamento adicionado com sucesso!")
+                st.rerun()
+    
+    st.markdown("---")
+    
+    # --- Tabela de faturamento existente ---
     faturamento = get_faturamento()
     
     if not faturamento:
-        st.info("ℹ️ Nenhum faturamento registrado. Importe notas de saída para gerar faturamento automaticamente.")
+        st.info("ℹ️ Nenhum faturamento registrado. Importe notas de saída ou adicione manualmente.")
         return
     
     df = pd.DataFrame(faturamento)
+    
+    # Garantir que a coluna cliente exista
+    if 'cliente' not in df.columns:
+        df['cliente'] = ''
+    df['cliente'] = df['cliente'].fillna('')
     
     # Metrics
     total_fat = df['valor'].sum()
@@ -46,12 +104,13 @@ def _render_faturamento():
     
     st.markdown("---")
     
-    # Editable table
-    df_edit = df[['id', 'data', 'descricao', 'regiao', 'veiculo', 'valor', 'cep', 'bairro', 'municipio']].copy()
+    # Editable table - now includes Cliente column
+    df_edit = df[['id', 'data', 'descricao', 'cliente', 'regiao', 'veiculo', 'valor', 'cep', 'bairro', 'municipio']].copy()
     df_edit = df_edit.rename(columns={
         'id': 'ID',
         'data': 'Data',
         'descricao': 'Descrição',
+        'cliente': 'Cliente',
         'regiao': 'Região',
         'veiculo': 'Veículo',
         'valor': 'Valor (R$)',
@@ -64,22 +123,61 @@ def _render_faturamento():
         df_edit,
         use_container_width=True,
         hide_index=True,
-        disabled=['ID', 'Data', 'Região', 'Veículo', 'CEP', 'Bairro', 'Município'],
+        disabled=['ID'],
         column_config={
             'ID': st.column_config.NumberColumn(width="small"),
             'Valor (R$)': st.column_config.NumberColumn(format="R$ %.2f", min_value=0),
+            'Cliente': st.column_config.TextColumn(width="medium"),
         },
         key="editor_faturamento"
     )
     
-    if st.button("💾 Salvar Alterações", type="primary", key="btn_salvar_fat"):
-        for _, row in edited_df.iterrows():
-            original = next((f for f in faturamento if f['id'] == row['ID']), None)
-            if original:
-                if row['Descrição'] != original['descricao'] or row['Valor (R$)'] != original['valor']:
-                    atualizar_faturamento(row['ID'], row['Descrição'], row['Valor (R$)'])
-        st.success("✅ Alterações salvas com sucesso!")
-        st.rerun()
+    col_btn1, col_btn2 = st.columns(2)
+    with col_btn1:
+        if st.button("💾 Salvar Alterações", type="primary", key="btn_salvar_fat"):
+            alteracoes = 0
+            for _, row in edited_df.iterrows():
+                original = next((f for f in faturamento if f['id'] == row['ID']), None)
+                if original:
+                    kwargs = {}
+                    if row['Descrição'] != (original.get('descricao') or ''):
+                        kwargs['descricao'] = row['Descrição']
+                    if row['Valor (R$)'] != original.get('valor', 0):
+                        kwargs['valor'] = row['Valor (R$)']
+                    if row['Cliente'] != (original.get('cliente') or ''):
+                        kwargs['cliente'] = row['Cliente']
+                    if row['Data'] != (original.get('data') or ''):
+                        kwargs['data'] = row['Data']
+                    if row['Região'] != (original.get('regiao') or ''):
+                        kwargs['regiao'] = row['Região']
+                    if row['Veículo'] != (original.get('veiculo') or ''):
+                        kwargs['veiculo'] = row['Veículo']
+                    if row['CEP'] != (original.get('cep') or ''):
+                        kwargs['cep'] = row['CEP']
+                    if row['Bairro'] != (original.get('bairro') or ''):
+                        kwargs['bairro'] = row['Bairro']
+                    if row['Município'] != (original.get('municipio') or ''):
+                        kwargs['municipio'] = row['Município']
+                    if kwargs:
+                        atualizar_faturamento(row['ID'], **kwargs)
+                        alteracoes += 1
+            if alteracoes:
+                st.success(f"✅ {alteracoes} registro(s) atualizado(s) com sucesso!")
+            else:
+                st.info("ℹ️ Nenhuma alteração detectada.")
+            st.rerun()
+    
+    with col_btn2:
+        fat_del_id = st.selectbox(
+            "Excluir faturamento (ID)",
+            options=[f['id'] for f in faturamento],
+            format_func=lambda x: f"ID {x} - {next((f['descricao'] for f in faturamento if f['id'] == x), '')}",
+            key="sel_del_fat"
+        )
+        if st.button("🗑️ Excluir Faturamento Selecionado", key="btn_del_fat"):
+            deletar_faturamento(fat_del_id)
+            st.success("✅ Faturamento excluído!")
+            st.rerun()
 
 
 def _render_custos():
@@ -193,27 +291,52 @@ def _render_relatorios():
         st.info("ℹ️ Nenhum dado financeiro disponível para gerar relatórios.")
         return
     
-    # Period filter
-    st.markdown("##### 📅 Filtro por Período")
+    # --- Filtro por Período ---
+    st.markdown("##### 📅 Filtros")
     col1, col2 = st.columns(2)
     with col1:
         data_inicio = st.date_input("Data Início", value=date(date.today().year, 1, 1), key="rel_data_ini")
     with col2:
         data_fim = st.date_input("Data Fim", value=date.today(), key="rel_data_fim")
     
-    data_ini_str = data_inicio.strftime("%Y-%m-%d")
-    data_fim_str = data_fim.strftime("%Y-%m-%d")
+    # --- Filtro por Cliente ---
+    df_fat_full = pd.DataFrame(faturamento) if faturamento else pd.DataFrame(columns=['data', 'valor', 'regiao', 'veiculo', 'cliente'])
     
-    # Filter data
-    df_fat = pd.DataFrame(faturamento) if faturamento else pd.DataFrame(columns=['data', 'valor', 'regiao', 'veiculo'])
+    # Garantir coluna cliente
+    if 'cliente' not in df_fat_full.columns:
+        df_fat_full['cliente'] = ''
+    df_fat_full['cliente'] = df_fat_full['cliente'].fillna('').astype(str)
+    
+    # Lista de clientes únicos
+    clientes_unicos = sorted([c for c in df_fat_full['cliente'].unique() if c.strip()])
+    
+    if clientes_unicos:
+        clientes_selecionados = st.multiselect(
+            "🏢 Filtrar por Cliente(s)",
+            options=clientes_unicos,
+            default=[],
+            placeholder="Todos os clientes",
+            key="rel_filtro_clientes"
+        )
+    else:
+        clientes_selecionados = []
+    
+    # --- Aplicar filtros ---
+    df_fat = df_fat_full.copy()
     df_cus = pd.DataFrame(custos) if custos else pd.DataFrame(columns=['data', 'valor', 'categoria'])
     
+    # Filtro por período - faturamento
     if not df_fat.empty:
         df_fat['data_parsed'] = pd.to_datetime(df_fat['data'], format='mixed', dayfirst=True, errors='coerce')
         df_fat = df_fat[df_fat['data_parsed'].notna()]
         mask_fat = (df_fat['data_parsed'].dt.date >= data_inicio) & (df_fat['data_parsed'].dt.date <= data_fim)
         df_fat = df_fat[mask_fat]
     
+    # Filtro por cliente
+    if clientes_selecionados and not df_fat.empty:
+        df_fat = df_fat[df_fat['cliente'].isin(clientes_selecionados)]
+    
+    # Filtro por período - custos
     if not df_cus.empty:
         df_cus['data_parsed'] = pd.to_datetime(df_cus['data'], errors='coerce')
         df_cus = df_cus[df_cus['data_parsed'].notna()]
@@ -261,6 +384,18 @@ def _render_relatorios():
             st.bar_chart(cus_cat.set_index('Categoria'))
         else:
             st.info("Sem dados de custos no período.")
+    
+    # Faturamento por Cliente
+    if not df_fat.empty and 'cliente' in df_fat.columns:
+        clientes_com_dados = df_fat[df_fat['cliente'].str.strip() != '']
+        if not clientes_com_dados.empty:
+            st.markdown("##### 🏢 Faturamento por Cliente")
+            fat_cliente = clientes_com_dados.groupby('cliente')['valor'].agg(['sum', 'count']).reset_index()
+            fat_cliente.columns = ['Cliente', 'Valor Total', 'Qtde Entregas']
+            fat_cliente = fat_cliente.sort_values('Valor Total', ascending=False)
+            fat_cliente_display = fat_cliente.copy()
+            fat_cliente_display['Valor Total'] = fat_cliente_display['Valor Total'].apply(lambda x: f"R$ {x:,.2f}")
+            st.dataframe(fat_cliente_display, use_container_width=True, hide_index=True)
     
     # Monthly evolution
     st.markdown("##### 📈 Evolução Mensal")
