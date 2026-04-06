@@ -233,6 +233,7 @@ def _render_nota_individual(uploaded_pdf, tipo_nota, produtos):
             valor, veiculo, regiao_nome, regiao_num = calcular_faturamento(cep_nota, total_unidades)
             if valor:
                 desc_fat = f"Nota {numero_nota} - {regiao_nome} - {total_unidades} un"
+                cliente_nome = dados.get('cliente', '') or ''
                 inserir_faturamento(
                     nota_id=nota_id,
                     data=data_nota,
@@ -242,7 +243,8 @@ def _render_nota_individual(uploaded_pdf, tipo_nota, produtos):
                     valor=valor,
                     cep=cep_nota,
                     bairro=bairro or "",
-                    municipio=municipio or ""
+                    municipio=municipio or "",
+                    cliente=cliente_nome
                 )
         
         st.success(f"✅ Nota {numero_nota} processada com sucesso! (ID: {nota_id})")
@@ -296,6 +298,8 @@ def _render_notas_batch(uploaded_pdfs, tipo_nota, produtos):
             if cep and len(cep.replace('-', '').replace('.', '')) >= 8:
                 bairro, municipio = buscar_cep(cep)
             
+            cliente = dados.get('cliente', '') or ''
+            
             preview_data.append({
                 'arquivo': pdf_file.name,
                 'numero': numero,
@@ -303,6 +307,7 @@ def _render_notas_batch(uploaded_pdfs, tipo_nota, produtos):
                 'cep': cep,
                 'bairro': bairro or '',
                 'municipio': municipio or '',
+                'cliente': cliente,
                 'itens_validos': itens_validos,
                 'itens_invalidos': itens_invalidos,
                 'total_itens': len(itens_validos),
@@ -433,7 +438,8 @@ def _render_notas_batch(uploaded_pdfs, tipo_nota, produtos):
                             valor=valor,
                             cep=info['cep'],
                             bairro=info['bairro'],
-                            municipio=info['municipio']
+                            municipio=info['municipio'],
+                            cliente=info.get('cliente', '')
                         )
                 
                 sucesso += 1
