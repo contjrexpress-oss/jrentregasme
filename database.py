@@ -64,9 +64,16 @@ def init_db():
             cep TEXT,
             bairro TEXT,
             municipio TEXT,
+            cliente TEXT DEFAULT '',
             FOREIGN KEY (nota_id) REFERENCES notas(id) ON DELETE CASCADE
         )
     """)
+    
+    # Migração: adicionar coluna cliente se não existir
+    try:
+        c.execute("SELECT cliente FROM faturamento LIMIT 1")
+    except sqlite3.OperationalError:
+        c.execute("ALTER TABLE faturamento ADD COLUMN cliente TEXT DEFAULT ''")
     
     # Tabela de custos
     c.execute("""
@@ -223,12 +230,12 @@ def get_estoque():
     return result
 
 # ============ FATURAMENTO ============
-def inserir_faturamento(nota_id, data, descricao, regiao, veiculo, valor, cep, bairro, municipio):
+def inserir_faturamento(nota_id, data, descricao, regiao, veiculo, valor, cep, bairro, municipio, cliente=""):
     conn = get_connection()
     conn.execute("""
-        INSERT INTO faturamento (nota_id, data, descricao, regiao, veiculo, valor, cep, bairro, municipio)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (nota_id, data, descricao, regiao, veiculo, valor, cep, bairro, municipio))
+        INSERT INTO faturamento (nota_id, data, descricao, regiao, veiculo, valor, cep, bairro, municipio, cliente)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (nota_id, data, descricao, regiao, veiculo, valor, cep, bairro, municipio, cliente or ""))
     conn.commit()
     conn.close()
 
@@ -238,10 +245,41 @@ def get_faturamento():
     conn.close()
     return [dict(r) for r in rows]
 
-def atualizar_faturamento(faturamento_id, descricao, valor):
+def atualizar_faturamento(faturamento_id, descricao=None, valor=None, cliente=None, data=None, regiao=None, veiculo=None, cep=None, bairro=None, municipio=None):
     conn = get_connection()
-    conn.execute("UPDATE faturamento SET descricao = ?, valor = ? WHERE id = ?", (descricao, valor, faturamento_id))
-    conn.commit()
+    updates = []
+    params = []
+    if descricao is not None:
+        updates.append("descricao = ?")
+        params.append(descricao)
+    if valor is not None:
+        updates.append("valor = ?")
+        params.append(valor)
+    if cliente is not None:
+        updates.append("cliente = ?")
+        params.append(cliente)
+    if data is not None:
+        updates.append("data = ?")
+        params.append(data)
+    if regiao is not None:
+        updates.append("regiao = ?")
+        params.append(regiao)
+    if veiculo is not None:
+        updates.append("veiculo = ?")
+        params.append(veiculo)
+    if cep is not None:
+        updates.append("cep = ?")
+        params.append(cep)
+    if bairro is not None:
+        updates.append("bairro = ?")
+        params.append(bairro)
+    if municipio is not None:
+        updates.append("municipio = ?")
+        params.append(municipio)
+    if updates:
+        params.append(faturamento_id)
+        conn.execute(f"UPDATE faturamento SET {', '.join(updates)} WHERE id = ?", params)
+        conn.commit()
     conn.close()
 
 def deletar_faturamento(faturamento_id):
