@@ -114,6 +114,14 @@ def _render_nota_individual(uploaded_pdf, tipo_nota, produtos):
     with col3:
         cep_nota = st.text_input("CEP do Destinatário", value=cep_extraido, key="cep_nota_input")
     
+    # Campo manual para nome do cliente
+    cliente_nome = st.text_input(
+        "👤 Nome do Cliente",
+        value="",
+        placeholder="Digite o nome do cliente (opcional)",
+        key="cliente_nota_input"
+    )
+    
     bairro = ""
     municipio = ""
     if cep_nota and len(cep_nota.replace('-', '').replace('.', '')) >= 8:
@@ -233,7 +241,6 @@ def _render_nota_individual(uploaded_pdf, tipo_nota, produtos):
             valor, veiculo, regiao_nome, regiao_num = calcular_faturamento(cep_nota, total_unidades)
             if valor:
                 desc_fat = f"Nota {numero_nota} - {regiao_nome} - {total_unidades} un"
-                cliente_nome = dados.get('cliente', '') or ''
                 inserir_faturamento(
                     nota_id=nota_id,
                     data=data_nota,
@@ -298,8 +305,6 @@ def _render_notas_batch(uploaded_pdfs, tipo_nota, produtos):
             if cep and len(cep.replace('-', '').replace('.', '')) >= 8:
                 bairro, municipio = buscar_cep(cep)
             
-            cliente = dados.get('cliente', '') or ''
-            
             preview_data.append({
                 'arquivo': pdf_file.name,
                 'numero': numero,
@@ -307,7 +312,6 @@ def _render_notas_batch(uploaded_pdfs, tipo_nota, produtos):
                 'cep': cep,
                 'bairro': bairro or '',
                 'municipio': municipio or '',
-                'cliente': cliente,
                 'itens_validos': itens_validos,
                 'itens_invalidos': itens_invalidos,
                 'total_itens': len(itens_validos),
@@ -335,6 +339,25 @@ def _render_notas_batch(uploaded_pdfs, tipo_nota, produtos):
         st.markdown(metric_card("Com Pendências", len(notas_warn), "metric-orange"), unsafe_allow_html=True)
     with c4:
         st.markdown(metric_card("Com Erro", len(notas_erro), "metric-red"), unsafe_allow_html=True)
+    
+    # Campo para nome do cliente no modo batch
+    st.markdown("#### 👤 Nome do Cliente")
+    modo_cliente = st.radio(
+        "Como deseja definir o cliente?",
+        ["cliente_padrao", "cliente_individual"],
+        format_func=lambda x: "🏷️ Mesmo cliente para todas as notas" if x == "cliente_padrao" else "📝 Definir cliente por nota individualmente",
+        key="batch_modo_cliente",
+        horizontal=True
+    )
+    
+    cliente_padrao = ""
+    if modo_cliente == "cliente_padrao":
+        cliente_padrao = st.text_input(
+            "Nome do Cliente (para todas as notas)",
+            value="",
+            placeholder="Digite o nome do cliente (opcional)",
+            key="batch_cliente_padrao"
+        )
     
     # Detail per PDF
     st.markdown("#### 📋 Detalhes por Arquivo")
@@ -373,6 +396,14 @@ def _render_notas_batch(uploaded_pdfs, tipo_nota, produtos):
                 with col_b:
                     st.text_input("Município", value=info['municipio'], disabled=True, key=f"batch_mun_{idx}")
             
+            if modo_cliente == "cliente_individual":
+                st.text_input(
+                    "👤 Nome do Cliente",
+                    value="",
+                    placeholder="Digite o nome do cliente (opcional)",
+                    key=f"batch_cliente_{idx}"
+                )
+            
             if info['itens_validos']:
                 df_itens = pd.DataFrame(info['itens_validos'], columns=["Código", "Quantidade"])
                 st.dataframe(df_itens, use_container_width=True, hide_index=True)
@@ -405,11 +436,21 @@ def _render_notas_batch(uploaded_pdfs, tipo_nota, produtos):
         
         progress = st.progress(0, text="Processando notas...")
         
+        # Mapear índice original de cada nota_ok para recuperar o campo de cliente individual
+        notas_ok_indices = [i for i, p in enumerate(preview_data) if not p['erro'] and p['numero'] and p['itens_validos']]
+        
         for idx, info in enumerate(notas_ok):
             progress.progress(
                 (idx + 1) / len(notas_ok),
                 text=f"📝 Processando nota {idx + 1} de {len(notas_ok)} — Nota {info['numero']}"
             )
+            
+            # Determinar nome do cliente
+            if modo_cliente == "cliente_padrao":
+                cliente_nome = cliente_padrao
+            else:
+                original_idx = notas_ok_indices[idx] if idx < len(notas_ok_indices) else idx
+                cliente_nome = st.session_state.get(f"batch_cliente_{original_idx}", '')
             
             try:
                 total_unidades = info['total_unidades']
@@ -439,7 +480,7 @@ def _render_notas_batch(uploaded_pdfs, tipo_nota, produtos):
                             cep=info['cep'],
                             bairro=info['bairro'],
                             municipio=info['municipio'],
-                            cliente=info.get('cliente', '')
+                            cliente=cliente_nome
                         )
                 
                 sucesso += 1
