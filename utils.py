@@ -100,90 +100,6 @@ def calcular_faturamento(cep, total_unidades):
     return None, None, None, None
 
 
-def extrair_cliente_danfe(full_text):
-    """Extrai o nome do cliente (NOME/RAZÃO SOCIAL) da seção DESTINATÁRIO de uma DANFE."""
-    cliente = ""
-    
-    # Localizar seção DESTINATÁRIO
-    dest_start = None
-    dest_markers = [
-        r'DESTINAT[ÁA]RIO\s*/?\s*REMETENTE',
-        r'DESTINAT[ÁA]RIO',
-    ]
-    for marker in dest_markers:
-        m = re.search(marker, full_text, re.IGNORECASE)
-        if m:
-            dest_start = m.end()
-            break
-    
-    if dest_start is not None:
-        # Pegar texto da seção destinatário
-        dest_text = full_text[dest_start:]
-        # Limitar até próxima seção
-        end_markers = [
-            r'\bFATURA\b', r'\bDADOS\s+DO\s+PRODUTO\b', r'\bDADOS\s+DOS\s+PRODUTOS\b',
-            r'\bC[ÁA]LCULO\s+DO\s+IMPOSTO\b', r'\bTRANSPORTADOR\b',
-            r'\bINFORMA[ÇC][ÕO]ES\s+COMPLEMENT', r'\bIMPOSTO\b',
-        ]
-        for end_marker in end_markers:
-            end_m = re.search(end_marker, dest_text[20:], re.IGNORECASE)
-            if end_m:
-                dest_text = dest_text[:20 + end_m.start()]
-                break
-        
-        lines = dest_text.strip().split('\n')
-        
-        # Estratégia 1: Encontrar a linha "NOME/RAZÃO SOCIAL" como header,
-        # e a próxima linha contém o nome do cliente
-        for i, line in enumerate(lines):
-            line_upper = line.strip().upper()
-            if 'NOME' in line_upper and ('RAZ' in line_upper or 'SOCIAL' in line_upper):
-                # A próxima linha deve conter o nome do cliente
-                if i + 1 < len(lines):
-                    next_line = lines[i + 1].strip()
-                    if next_line and not re.match(r'^[\d\.\-/]+$', next_line):
-                        # Pegar só a parte que é o nome (antes de números tipo CNPJ)
-                        # Remover números longos (CNPJ) do final
-                        nome = re.sub(r'\s+\d{11,}.*$', '', next_line).strip()
-                        if nome:
-                            cliente = nome
-                            break
-        
-        # Estratégia 2: Procurar na mesma linha - "NOME/RAZÃO SOCIAL\nVALOR"
-        if not cliente:
-            m = re.search(r'NOME\s*/?\s*RAZ[ÃA]O\s+SOCIAL[^\n]*\n\s*([A-Z][A-Z\s\.\-&]+(?:LTDA|ME|EPP|SA|S\.A\.|EIRELI|S/A|LTDA\.)?)', dest_text, re.IGNORECASE)
-            if m:
-                cliente = m.group(1).strip()
-        
-        # Estratégia 3: Pegar a primeira linha que parece um nome de empresa
-        if not cliente:
-            for line in lines:
-                line = line.strip()
-                if not line:
-                    continue
-                line_upper = line.upper()
-                # Pular linhas de cabeçalho/labels
-                if any(k in line_upper for k in ['NOME', 'RAZÃO', 'SOCIAL', 'CNPJ', 'CPF', 'ENDEREÇO', 'CEP', 
-                        'BAIRRO', 'MUNICÍPIO', 'UF ', 'FONE', 'INSCRIÇÃO', 'DESTINAT', 'REMETENTE']):
-                    continue
-                # Pular números puros
-                if re.match(r'^[\d\.\-/\s]+$', line):
-                    continue
-                # Deve ter pelo menos 3 caracteres e conter letras
-                if len(line) >= 3 and re.search(r'[A-Za-z]', line):
-                    # Remover CNPJ/CPF do final se presente
-                    nome = re.sub(r'\s+\d{11,}.*$', '', line).strip()
-                    if nome and len(nome) >= 3:
-                        cliente = nome
-                        break
-    
-    # Limpar o nome do cliente
-    if cliente:
-        cliente = re.sub(r'\s*(CNPJ|CPF|INSCRI|ENDERE).*$', '', cliente, flags=re.IGNORECASE).strip()
-        cliente = cliente.strip(' \t\n\r-–—')
-    
-    return cliente
-
 
 def extrair_dados_danfe(pdf_file):
     """Extrai dados de uma DANFE (PDF) usando pdfplumber."""
@@ -191,7 +107,6 @@ def extrair_dados_danfe(pdf_file):
         'numero': None,
         'data': None,
         'cep': None,
-        'cliente': None,
         'itens': []  # list of (codigo, quantidade)
     }
     
@@ -341,9 +256,6 @@ def extrair_dados_danfe(pdf_file):
                     cep_dest = all_ceps[0][0] + all_ceps[0][1]
             
             resultado['cep'] = cep_dest
-            
-            # === Extrair cliente (NOME/RAZÃO SOCIAL do DESTINATÁRIO) ===
-            resultado['cliente'] = extrair_cliente_danfe(full_text)
             
             # === Extrair itens ===
             # Os códigos de produto seguem o formato "P" + 6 dígitos (ex: P000058, P000225)
