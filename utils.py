@@ -125,15 +125,26 @@ def extrair_dados_danfe(pdf_file):
                     all_tables.extend(tables)
             
             # === Extrair número da nota ===
-            # Padrão NFe: "Nº 000.123.456" or "NF-e Nº" or "NOTA FISCAL"
+            # Prioridade 1: Pedido Interno (ex: "PED. INTERNO  32606")
+            # Prioridade 2: NF-e com No. (ex: "NF-e\nNo. 001183")
+            # Prioridade 3: Outros padrões genéricos
             patterns_numero = [
-                r'N[º°]\s*\.?\s*([\d\.]+)',
+                # Pedido interno: "PED. INTERNO 32606" ou "PEDIDO INTERNO 32606"
+                r'PED(?:IDO)?\.?\s*INTERNO\s*[:\s]*(\d+)',
+                # NF-e No. 001183
+                r'NF-?e\s*\n?\s*No\.?\s*(\d+)',
+                # No. seguido de número (dentro de contexto NF-e)
+                r'No\.?\s+(\d{3,})',
+                # NÚMERO: 001183 ou Número: 001183
+                r'(?:N[Úú]MERO|NUMERO)\s*:?\s*([\d\.]+)',
+                # Nº seguido de número (formato com pontos: 000.123.456)
+                r'N[º°]\s*\.?\s*([\d\.]{5,})',
+                # NF-e Nº
                 r'NF-?e?\s*N[º°]?\s*\.?\s*([\d\.]+)',
+                # NOTA FISCAL ... Nº
                 r'NOTA\s+FISCAL[\s\S]*?N[º°]\s*\.?\s*([\d\.]+)',
-                r'(?:Número|NUMERO)\s*:?\s*([\d\.]+)',
-                r'(?:DANFE|NFe)[\s\S]*?([\d]{3}\.?[\d]{3}\.?[\d]{3})',
+                # NF simples
                 r'NF\s*[:-]?\s*(\d+)',
-                r'PEDIDO\s*(?:INTERNO)?\s*N?[º°]?\s*:?\s*(\d+)',
             ]
             for pat in patterns_numero:
                 m = re.search(pat, full_text, re.IGNORECASE)
@@ -154,66 +165,178 @@ def extrair_dados_danfe(pdf_file):
                     resultado['data'] = data_str
                     break
             
-            # === Extrair CEP ===
-            patterns_cep = [
-                r'CEP[:\s]*([\d]{5}[\-\.]?[\d]{3})',
-                r'CEP[:\s]*(\d{8})',
-                r'(\d{5})[\-\.](\d{3})',
+            # === Extrair CEP do DESTINATÁRIO ===
+            # Estratégia: localizar a seção do destinatário e extrair o CEP de lá
+            # Em uma DANFE, o destinatário aparece DEPOIS do emitente
+            cep_dest = None
+            
+            # Tentar encontrar seção do destinatário e pegar CEP dela
+            # Padrão 1: Buscar CEP após marcadores de destinatário
+            dest_patterns = [
+                # CEP que aparece após "DESTINATÁRIO" ou "DEST" no texto
+                r'DESTINAT[ÁA]RIO.*?CEP[:\s]*([\d]{5}[\-\.]?[\d]{3})',
+                r'DEST(?:INAT[ÁA]RIO)?.*?CEP[:\s]*([\d]{5}[\-\.]?[\d]{3})',
+                # CEP que aparece após "DATA ENTRADA" ou "ENTRADA/SAÍDA" (seção do dest)
+                r'DATA\s+ENTRADA.*?CEP[:\s]*([\d]{5}[\-\.]?[\d]{3})',
+                r'ENTRADA/?SA[ÍI]DA.*?CEP[:\s]*([\d]{5}[\-\.]?[\d]{3})',
             ]
-            for pat in patterns_cep:
-                m = re.search(pat, full_text, re.IGNORECASE)
+            for pat in dest_patterns:
+                m = re.search(pat, full_text, re.IGNORECASE | re.DOTALL)
                 if m:
-                    if m.lastindex == 2:
-                        resultado['cep'] = m.group(1) + m.group(2)
-                    else:
-                        resultado['cep'] = re.sub(r'\D', '', m.group(1))
+                    cep_dest = re.sub(r'\D', '', m.group(1))
                     break
             
+            # Padrão 2: Coletar TODOS os CEPs e pegar o segundo (destinatário)
+            # Em DANFEs, o primeiro CEP é do emitente e o segundo do destinatário
+            if not cep_dest:
+                all_ceps = re.findall(r'CEP[:\s]*([\d]{5}[\-\.]?[\d]{3})', full_text, re.IGNORECASE)
+                if not all_ceps:
+                    all_ceps = re.findall(r'(\d{5}[\-\.]\d{3})', full_text)
+                
+                if len(all_ceps) >= 2:
+                    # Segundo CEP = destinatário
+                    cep_dest = re.sub(r'\D', '', all_ceps[1])
+                elif len(all_ceps) == 1:
+                    # Se só tem um, usa esse mesmo
+                    cep_dest = re.sub(r'\D', '', all_ceps[0])
+            
+            # Padrão 3: CEP sem label (8 dígitos consecutivos no formato XXXXX-XXX)
+            if not cep_dest:
+                m = re.search(r'(\d{5})[\-\.](\d{3})', full_text)
+                if m:
+                    cep_dest = m.group(1) + m.group(2)
+            
+            resultado['cep'] = cep_dest
+            
             # === Extrair itens ===
-            # Strategy 1: Look for tables with code and quantity columns
+            # Os códigos de produto seguem o formato "P" + 6 dígitos (ex: P000058, P000225)
             itens_encontrados = []
             
+            # Strategy 1: Extrair de tabelas do PDF
             for table in all_tables:
                 if not table or len(table) < 2:
                     continue
-                # Try to identify header row
-                header = table[0] if table[0] else []
-                header_str = ' '.join([str(h).upper() for h in header if h])
                 
+                # Tentar identificar a linha de cabeçalho
+                # Verificar cada linha como possível cabeçalho
+                header_row_idx = None
                 cod_idx = None
                 qtd_idx = None
                 
-                for i, h in enumerate(header):
-                    if h is None:
+                for row_idx, row in enumerate(table):
+                    if not row:
                         continue
-                    h_up = str(h).upper().strip()
-                    if any(k in h_up for k in ['CÓDIGO', 'CODIGO', 'CÓD', 'COD']):
-                        cod_idx = i
-                    if any(k in h_up for k in ['QTDE', 'QTD', 'QUANT', 'QUANTIDADE']):
-                        qtd_idx = i
+                    row_str = ' '.join([str(c).upper() for c in row if c])
+                    
+                    # Verificar se esta linha contém cabeçalhos de código de produto
+                    temp_cod_idx = None
+                    temp_qtd_idx = None
+                    
+                    for i, cell in enumerate(row):
+                        if cell is None:
+                            continue
+                        cell_up = str(cell).upper().strip()
+                        if any(k in cell_up for k in ['CÓDIGO PRODUTO', 'CODIGO PRODUTO',
+                                'COD. PRODUTO', 'COD PRODUTO', 'CÓDIGO', 'CODIGO',
+                                'CÓD. PROD', 'COD. PROD', 'CÓD', 'COD']):
+                            temp_cod_idx = i
+                        if any(k in cell_up for k in ['QTDE', 'QTD', 'QUANT', 'QUANTIDADE',
+                                'QTD.', 'QTDE.']):
+                            temp_qtd_idx = i
+                    
+                    if temp_cod_idx is not None:
+                        header_row_idx = row_idx
+                        cod_idx = temp_cod_idx
+                        qtd_idx = temp_qtd_idx
+                        break
                 
-                if cod_idx is not None and qtd_idx is not None:
-                    for row in table[1:]:
-                        if row and len(row) > max(cod_idx, qtd_idx):
-                            codigo = str(row[cod_idx]).strip() if row[cod_idx] else ""
-                            qtd_str = str(row[qtd_idx]).strip() if row[qtd_idx] else "0"
+                if cod_idx is not None:
+                    for row in table[header_row_idx + 1:]:
+                        if not row or len(row) <= cod_idx:
+                            continue
+                        codigo = str(row[cod_idx]).strip() if row[cod_idx] else ""
+                        
+                        # Extrair código no formato P + 6 dígitos da célula
+                        cod_match = re.search(r'(P\d{6})', codigo, re.IGNORECASE)
+                        if cod_match:
+                            codigo = cod_match.group(1).upper()
+                        elif not re.match(r'^P\d{6}$', codigo, re.IGNORECASE):
+                            # Se não parece um código válido, pular
+                            continue
+                        
+                        # Extrair quantidade
+                        qtd = 1  # Default: 1 unidade se não encontrar qtd
+                        if qtd_idx is not None and len(row) > qtd_idx and row[qtd_idx]:
+                            qtd_str = str(row[qtd_idx]).strip()
                             qtd_str = re.sub(r'[^\d,\.]', '', qtd_str).replace(',', '.')
                             try:
-                                qtd = int(float(qtd_str)) if qtd_str else 0
+                                qtd = int(float(qtd_str)) if qtd_str else 1
                             except ValueError:
-                                qtd = 0
-                            if codigo and qtd > 0:
-                                itens_encontrados.append((codigo, qtd))
+                                qtd = 1
+                        
+                        if codigo and qtd > 0:
+                            itens_encontrados.append((codigo, qtd))
             
-            # Strategy 2: If no items from tables, try regex on text
+            # Strategy 2: Buscar códigos P+6dígitos diretamente no texto
             if not itens_encontrados:
-                # Pattern: code (alphanumeric) followed by description and quantity
+                # Localizar seção de produtos no texto
+                # Procurar após "DADOS DO PRODUTO", "CÓDIGO PRODUTO", etc.
+                produto_section = full_text
+                section_markers = [
+                    r'DADOS\s+DO\s+PRODUTO',
+                    r'DADOS\s+DOS\s+PRODUTOS',
+                    r'C[ÓO]DIGO\s+PRODUTO',
+                    r'COD\.?\s+PRODUTO',
+                ]
+                for marker in section_markers:
+                    m = re.search(marker, full_text, re.IGNORECASE)
+                    if m:
+                        produto_section = full_text[m.start():]
+                        break
+                
+                # Buscar todos os códigos P + 6 dígitos na seção de produtos
+                codigos_found = re.findall(r'(P\d{6})', produto_section, re.IGNORECASE)
+                
+                if codigos_found:
+                    # Para cada código, tentar encontrar a quantidade associada
+                    lines = produto_section.split('\n')
+                    for line in lines:
+                        cod_in_line = re.findall(r'(P\d{6})', line, re.IGNORECASE)
+                        for cod in cod_in_line:
+                            cod = cod.upper()
+                            # Tentar extrair quantidade da mesma linha
+                            # Padrão: código ... quantidade ... UN/PC/CX etc.
+                            qtd = 1
+                            qtd_match = re.search(
+                                r'(?:' + re.escape(cod) + r')\s+.*?(\d+[,\.]?\d*)\s*(?:UN|PC|CX|KG|LT|MT|PÇ|PCS|UNID)',
+                                line, re.IGNORECASE
+                            )
+                            if qtd_match:
+                                qtd_str = qtd_match.group(1).replace(',', '.')
+                                try:
+                                    qtd = int(float(qtd_str))
+                                except ValueError:
+                                    qtd = 1
+                            if qtd > 0:
+                                itens_encontrados.append((cod, qtd))
+                    
+                    # Se encontrou códigos mas não conseguiu parear com linhas,
+                    # adicionar cada código com quantidade 1
+                    if not itens_encontrados and codigos_found:
+                        for cod in codigos_found:
+                            itens_encontrados.append((cod.upper(), 1))
+            
+            # Strategy 3: Regex genérico para códigos alfanuméricos + quantidade
+            if not itens_encontrados:
+                # Tentar padrão genérico: código alfanumérico + descrição + qtd + unidade
                 lines = full_text.split('\n')
                 for line in lines:
-                    # Match lines with a product code pattern and a quantity
-                    m = re.match(r'^\s*([A-Za-z0-9\-\.]+)\s+.+?\s+(\d+[,\.]?\d*)\s+(?:UN|PC|CX|KG|LT|MT)', line, re.IGNORECASE)
+                    m = re.match(
+                        r'^\s*\d*\s*([A-Za-z]\d{4,}[A-Za-z\d\-]*)\s+.+?\s+(\d+[,\.]?\d*)\s+(?:UN|PC|CX|KG|LT|MT|PÇ|PCS|UNID)',
+                        line, re.IGNORECASE
+                    )
                     if m:
-                        codigo = m.group(1).strip()
+                        codigo = m.group(1).strip().upper()
                         qtd_str = m.group(2).replace(',', '.')
                         try:
                             qtd = int(float(qtd_str))
@@ -222,11 +345,10 @@ def extrair_dados_danfe(pdf_file):
                         if codigo and qtd > 0:
                             itens_encontrados.append((codigo, qtd))
             
-            # Strategy 3: More aggressive pattern matching
+            # Strategy 4: Mais agressivo - qualquer código seguido de números
             if not itens_encontrados:
-                # Try matching any line with code-like pattern followed by numbers
                 item_pattern = re.findall(
-                    r'([A-Z]{2,}[\d]+[A-Z\d\-]*)\s+.*?(\d+)\s*(?:UN|PC|CX|PÇ|PÇS|PCS|UNID)',
+                    r'([A-Z]\d{4,}[A-Z\d\-]*)\s+.*?(\d+)\s*(?:UN|PC|CX|PÇ|PÇS|PCS|UNID)',
                     full_text, re.IGNORECASE
                 )
                 for codigo, qtd_str in item_pattern:
@@ -235,9 +357,19 @@ def extrair_dados_danfe(pdf_file):
                     except ValueError:
                         qtd = 0
                     if qtd > 0:
-                        itens_encontrados.append((codigo.strip(), qtd))
+                        itens_encontrados.append((codigo.strip().upper(), qtd))
             
-            resultado['itens'] = itens_encontrados
+            # Deduplicar: agrupar por código, somando quantidades
+            if itens_encontrados:
+                itens_dict = {}
+                for codigo, qtd in itens_encontrados:
+                    if codigo in itens_dict:
+                        itens_dict[codigo] += qtd
+                    else:
+                        itens_dict[codigo] = qtd
+                resultado['itens'] = [(cod, qtd) for cod, qtd in itens_dict.items()]
+            else:
+                resultado['itens'] = []
     
     except Exception as e:
         resultado['erro'] = str(e)
