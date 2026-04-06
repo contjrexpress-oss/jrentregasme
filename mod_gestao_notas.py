@@ -1,0 +1,127 @@
+import streamlit as st
+import pandas as pd
+from styles import page_header, metric_card
+from database import get_notas, get_itens_nota, excluir_nota, get_notas_excluidas
+from auth import get_username
+
+
+def render():
+    st.markdown(page_header("📋 Gestão de Notas", "Visualize, gerencie e exclua notas fiscais processadas"), unsafe_allow_html=True)
+    
+    tab1, tab2 = st.tabs(["📄 Notas Processadas", "🗑️ Histórico de Exclusões"])
+    
+    with tab1:
+        _render_notas_processadas()
+    with tab2:
+        _render_historico_exclusoes()
+
+
+def _render_notas_processadas():
+    notas = get_notas()
+    
+    if not notas:
+        st.info("ℹ️ Nenhuma nota fiscal processada.")
+        return
+    
+    df = pd.DataFrame(notas)
+    
+    # Metrics
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.markdown(metric_card("Total de Notas", len(df), "metric-blue"), unsafe_allow_html=True)
+    with col2:
+        entradas = len(df[df['tipo'] == 'entrada'])
+        st.markdown(metric_card("Notas de Entrada", f"🟢 {entradas}", "metric-green"), unsafe_allow_html=True)
+    with col3:
+        saidas = len(df[df['tipo'] == 'saida'])
+        st.markdown(metric_card("Notas de Saída", f"🔴 {saidas}", "metric-red"), unsafe_allow_html=True)
+    
+    st.markdown("---")
+    
+    # Filter
+    col_f1, col_f2 = st.columns(2)
+    with col_f1:
+        filtro_tipo = st.selectbox("Filtrar por tipo", ["Todas", "Entrada", "Saída"], key="filtro_tipo_nota")
+    with col_f2:
+        filtro_busca = st.text_input("🔍 Buscar por nº da nota", key="busca_nota")
+    
+    df_filtrado = df.copy()
+    if filtro_tipo == "Entrada":
+        df_filtrado = df_filtrado[df_filtrado['tipo'] == 'entrada']
+    elif filtro_tipo == "Saída":
+        df_filtrado = df_filtrado[df_filtrado['tipo'] == 'saida']
+    
+    if filtro_busca:
+        df_filtrado = df_filtrado[df_filtrado['numero'].str.contains(filtro_busca, case=False, na=False)]
+    
+    # Display notes
+    for _, nota in df_filtrado.iterrows():
+        tipo_emoji = "🟢" if nota['tipo'] == 'entrada' else "🔴"
+        tipo_label = "ENTRADA" if nota['tipo'] == 'entrada' else "SAÍDA"
+        
+        with st.expander(f"{tipo_emoji} Nota {nota['numero']} | {tipo_label} | {nota['data_nota'] or 'S/D'} | {nota['total_unidades']} un"):
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.markdown(f"**Nº Nota:** {nota['numero']}")
+                st.markdown(f"**Data:** {nota['data_nota'] or 'N/A'}")
+            with col2:
+                st.markdown(f"**CEP:** {nota['cep'] or 'N/A'}")
+                st.markdown(f"**Bairro:** {nota['bairro'] or 'N/A'}")
+            with col3:
+                st.markdown(f"**Município:** {nota['municipio'] or 'N/A'}")
+                st.markdown(f"**Total Un.:** {nota['total_unidades']}")
+            with col4:
+                st.markdown(f"**Arquivo:** {nota['arquivo_nome'] or 'N/A'}")
+                st.markdown(f"**Importado em:** {nota['data_importacao']}")
+            
+            # Items
+            itens = get_itens_nota(nota['id'])
+            if itens:
+                st.markdown("**Itens:**")
+                df_itens = pd.DataFrame(itens)
+                df_itens_display = df_itens[['codigo_produto', 'descricao', 'quantidade']].rename(columns={
+                    'codigo_produto': 'Código',
+                    'descricao': 'Descrição',
+                    'quantidade': 'Quantidade'
+                })
+                st.dataframe(df_itens_display, use_container_width=True, hide_index=True)
+            
+            # Delete button
+            st.markdown("---")
+            col_d1, col_d2 = st.columns([3, 1])
+            with col_d1:
+                motivo = st.text_input("Motivo da exclusão (opcional)", key=f"motivo_{nota['id']}")
+            with col_d2:
+                st.markdown("<br>", unsafe_allow_html=True)
+                if st.button("🗑️ Excluir Nota", key=f"btn_del_{nota['id']}", type="primary"):
+                    excluir_nota(nota['id'], motivo=motivo, usuario=get_username())
+                    st.success(f"✅ Nota {nota['numero']} excluída com estorno automático no estoque e financeiro.")
+                    st.rerun()
+
+
+def _render_historico_exclusoes():
+    st.markdown("#### 🗑️ Histórico de Notas Excluídas")
+    
+    excluidas = get_notas_excluidas()
+    
+    if not excluidas:
+        st.info("ℹ️ Nenhuma nota foi excluída.")
+        return
+    
+    df = pd.DataFrame(excluidas)
+    
+    st.markdown(metric_card("Total de Exclusões", len(df), "metric-red"), unsafe_allow_html=True)
+    st.markdown("")
+    
+    df_display = df[['numero_nota', 'data_nota', 'tipo', 'total_unidades', 'arquivo_nome', 'motivo', 'data_exclusao', 'usuario']].rename(columns={
+        'numero_nota': 'Nº Nota',
+        'data_nota': 'Data Nota',
+        'tipo': 'Tipo',
+        'total_unidades': 'Unidades',
+        'arquivo_nome': 'Arquivo',
+        'motivo': 'Motivo',
+        'data_exclusao': 'Data Exclusão',
+        'usuario': 'Excluído por'
+    })
+    
+    st.dataframe(df_display, use_container_width=True, hide_index=True)
