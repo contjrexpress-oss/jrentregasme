@@ -166,45 +166,93 @@ def extrair_dados_danfe(pdf_file):
                     break
             
             # === Extrair CEP do DESTINATÁRIO ===
-            # Estratégia: localizar a seção do destinatário e extrair o CEP de lá
-            # Em uma DANFE, o destinatário aparece DEPOIS do emitente
+            # Em uma DANFE, o CEP do destinatário fica na seção "DESTINATÁRIO / REMETENTE"
+            # que aparece DEPOIS da seção do emitente. Precisamos extrair ESSE CEP.
             cep_dest = None
             
-            # Tentar encontrar seção do destinatário e pegar CEP dela
-            # Padrão 1: Buscar CEP após marcadores de destinatário
-            dest_patterns = [
-                # CEP que aparece após "DESTINATÁRIO" ou "DEST" no texto
-                r'DESTINAT[ÁA]RIO.*?CEP[:\s]*([\d]{5}[\-\.]?[\d]{3})',
-                r'DEST(?:INAT[ÁA]RIO)?.*?CEP[:\s]*([\d]{5}[\-\.]?[\d]{3})',
-                # CEP que aparece após "DATA ENTRADA" ou "ENTRADA/SAÍDA" (seção do dest)
-                r'DATA\s+ENTRADA.*?CEP[:\s]*([\d]{5}[\-\.]?[\d]{3})',
-                r'ENTRADA/?SA[ÍI]DA.*?CEP[:\s]*([\d]{5}[\-\.]?[\d]{3})',
+            # --- Estratégia 1: Localizar a seção DESTINATÁRIO e extrair CEP dela ---
+            # Procurar o início da seção do destinatário
+            dest_section_start = None
+            dest_markers = [
+                r'DESTINAT[ÁA]RIO\s*/?\s*REMETENTE',
+                r'DESTINAT[ÁA]RIO',
             ]
-            for pat in dest_patterns:
-                m = re.search(pat, full_text, re.IGNORECASE | re.DOTALL)
+            for marker in dest_markers:
+                m = re.search(marker, full_text, re.IGNORECASE)
                 if m:
-                    cep_dest = re.sub(r'\D', '', m.group(1))
+                    dest_section_start = m.start()
                     break
             
-            # Padrão 2: Coletar TODOS os CEPs e pegar o segundo (destinatário)
+            if dest_section_start is not None:
+                # Extrair texto a partir do destinatário até a próxima seção grande
+                # (FATURA, DADOS DO PRODUTO, CÁLCULO DO IMPOSTO, TRANSPORTADOR, etc.)
+                dest_text = full_text[dest_section_start:]
+                end_markers = [
+                    r'\bFATURA\b',
+                    r'\bDADOS\s+DO\s+PRODUTO\b',
+                    r'\bDADOS\s+DOS\s+PRODUTOS\b',
+                    r'\bC[ÁA]LCULO\s+DO\s+IMPOSTO\b',
+                    r'\bTRANSPORTADOR\b',
+                    r'\bINFORMA[ÇC][ÕO]ES\s+COMPLEMENT',
+                    r'\bIMPOSTO\b',
+                ]
+                for end_marker in end_markers:
+                    end_m = re.search(end_marker, dest_text[50:], re.IGNORECASE)
+                    if end_m:
+                        dest_text = dest_text[:50 + end_m.start()]
+                        break
+                
+                # Buscar CEP dentro da seção do destinatário
+                # Padrão com label "CEP"
+                cep_match = re.search(r'CEP[:\s]*([\d]{5}[\-\.]?[\d]{3})', dest_text, re.IGNORECASE)
+                if cep_match:
+                    cep_dest = re.sub(r'\D', '', cep_match.group(1))
+                else:
+                    # Padrão sem label - formato XXXXX-XXX na seção
+                    cep_match = re.search(r'(\d{5})[\-\.](\d{3})', dest_text)
+                    if cep_match:
+                        cep_dest = cep_match.group(1) + cep_match.group(2)
+            
+            # --- Estratégia 2: Buscar CEP em tabelas na seção do destinatário ---
+            if not cep_dest:
+                for table in all_tables:
+                    if not table:
+                        continue
+                    for row in table:
+                        if not row:
+                            continue
+                        row_str = ' '.join([str(c) for c in row if c])
+                        row_upper = row_str.upper()
+                        # Se a linha contém marcadores do destinatário E um CEP
+                        if any(k in row_upper for k in ['DESTINAT', 'BAIRRO/DISTRITO', 'BAIRRO / DISTRITO']):
+                            cep_m = re.search(r'(\d{5})[\-\.](\d{3})', row_str)
+                            if cep_m:
+                                cep_dest = cep_m.group(1) + cep_m.group(2)
+                                break
+                        # Se a célula individual tem label CEP seguido do valor
+                        for cell in row:
+                            if cell is None:
+                                continue
+                            cell_str = str(cell).strip()
+                            cell_upper = cell_str.upper()
+                            if 'CEP' in cell_upper:
+                                cep_m = re.search(r'(\d{5})[\-\.]?(\d{3})', cell_str)
+                                if cep_m:
+                                    # Guarda como candidato, mas continua procurando
+                                    # na seção do destinatário
+                                    cep_dest = cep_m.group(1) + cep_m.group(2)
+                    if cep_dest:
+                        break
+            
+            # --- Estratégia 3: Coletar TODOS os CEPs e pegar o segundo (destinatário) ---
             # Em DANFEs, o primeiro CEP é do emitente e o segundo do destinatário
             if not cep_dest:
-                all_ceps = re.findall(r'CEP[:\s]*([\d]{5}[\-\.]?[\d]{3})', full_text, re.IGNORECASE)
-                if not all_ceps:
-                    all_ceps = re.findall(r'(\d{5}[\-\.]\d{3})', full_text)
-                
+                all_ceps = re.findall(r'(\d{5})[\-\.](\d{3})', full_text)
                 if len(all_ceps) >= 2:
                     # Segundo CEP = destinatário
-                    cep_dest = re.sub(r'\D', '', all_ceps[1])
+                    cep_dest = all_ceps[1][0] + all_ceps[1][1]
                 elif len(all_ceps) == 1:
-                    # Se só tem um, usa esse mesmo
-                    cep_dest = re.sub(r'\D', '', all_ceps[0])
-            
-            # Padrão 3: CEP sem label (8 dígitos consecutivos no formato XXXXX-XXX)
-            if not cep_dest:
-                m = re.search(r'(\d{5})[\-\.](\d{3})', full_text)
-                if m:
-                    cep_dest = m.group(1) + m.group(2)
+                    cep_dest = all_ceps[0][0] + all_ceps[0][1]
             
             resultado['cep'] = cep_dest
             
