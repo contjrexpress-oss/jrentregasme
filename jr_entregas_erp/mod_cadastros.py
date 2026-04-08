@@ -12,6 +12,9 @@ from utils import (
 
 def render():
     """Renderiza o módulo de Cadastro de Clientes."""
+    from auth import verificar_acesso
+    if not verificar_acesso('cadastros'):
+        return
     st.markdown(
         page_header("👥 Cadastros", "Gerenciamento de clientes e parceiros"),
         unsafe_allow_html=True
@@ -335,8 +338,11 @@ def _render_editar_cliente():
             else:
                 st.error(f"❌ {mensagem}")
 
+        from auth import pode_excluir
         if desativar:
-            if cliente['ativo']:
+            if not pode_excluir():
+                st.warning("🔒 Apenas administradores podem desativar/reativar clientes.")
+            elif cliente['ativo']:
                 sucesso, msg = database.deletar_cliente(cliente_id)
                 if sucesso:
                     st.warning("⚠️ Cliente desativado com sucesso.")
