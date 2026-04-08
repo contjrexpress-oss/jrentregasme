@@ -246,6 +246,50 @@ def init_db():
     """)
 
     
+    # ============ FASE 8: TABELA DE USUÁRIOS ============
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS usuarios (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT NOT NULL UNIQUE,
+            password_hash TEXT NOT NULL,
+            nome TEXT NOT NULL,
+            email TEXT DEFAULT '',
+            perfil TEXT NOT NULL DEFAULT 'CONVIDADOS' CHECK(perfil IN ('ADM', 'FUNCIONARIOS', 'CONVIDADOS')),
+            data_criacao TEXT NOT NULL,
+            ativo INTEGER DEFAULT 1
+        )
+    """)
+    
+    # Tabela de log de ações de usuários
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS log_acoes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            usuario TEXT NOT NULL,
+            acao TEXT NOT NULL,
+            detalhes TEXT DEFAULT '',
+            data TEXT NOT NULL
+        )
+    """)
+    
+    # Criar usuário admin padrão se não existir
+    import hashlib
+    admin_exists = c.execute("SELECT id FROM usuarios WHERE username = 'admin'").fetchone()
+    if not admin_exists:
+        senha_hash = hashlib.sha256("jr2026".encode()).hexdigest()
+        c.execute("""
+            INSERT INTO usuarios (username, password_hash, nome, email, perfil, data_criacao, ativo)
+            VALUES (?, ?, ?, ?, ?, ?, 1)
+        """, ("admin", senha_hash, "Administrador", "", "ADM", datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+    
+    # Criar usuário equipe padrão se não existir
+    equipe_exists = c.execute("SELECT id FROM usuarios WHERE username = 'equipe'").fetchone()
+    if not equipe_exists:
+        senha_hash = hashlib.sha256("jr2026".encode()).hexdigest()
+        c.execute("""
+            INSERT INTO usuarios (username, password_hash, nome, email, perfil, data_criacao, ativo)
+            VALUES (?, ?, ?, ?, ?, ?, 1)
+        """, ("equipe", senha_hash, "Equipe", "", "FUNCIONARIOS", datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+    
     # ============ FASE 7C: TABELA LOG DE BACKUPS ============
     c.execute("""
         CREATE TABLE IF NOT EXISTS log_backups (
@@ -471,6 +515,116 @@ def get_estoque():
             d['status'] = 'sem_limite'
         result.append(d)
     return result
+
+def atualizar_quantidade_estoque(codigo, nova_quantidade):
+    """Atualiza a quantidade real do estoque ajustando o estoque_inicial.
+    estoque_atual = estoque_inicial + entradas - saidas
+    Portanto: estoque_inicial = nova_quantidade - entradas + saidas
+    """
+    conn = get_connection()
+    row = conn.execute("""
+        SELECT 
+            COALESCE(SUM(CASE WHEN n.tipo = 'entrada' THEN in2.quantidade ELSE 0 END), 0) as entradas,
+            COALESCE(SUM(CASE WHEN n.tipo = 'saida' THEN in2.quantidade ELSE 0 END), 0) as saidas
+        FROM produtos p
+        LEFT JOIN itens_nota in2 ON p.codigo = in2.codigo_produto
+        LEFT JOIN notas n ON in2.nota_id = n.id
+        WHERE p.codigo = ?
+        GROUP BY p.codigo
+    """, (str(codigo).strip(),)).fetchone()
+    
+    if row:
+        entradas = row['entradas']
+        saidas = row['saidas']
+    else:
+        entradas = 0
+        saidas = 0
+    
+    novo_estoque_inicial = int(nova_quantidade) - entradas + saidas
+    conn.execute("UPDATE produtos SET estoque_inicial = ? WHERE codigo = ?", (novo_estoque_inicial, str(codigo).strip()))
+    conn.commit()
+    conn.close()
+    return True
+
+
+def atualizar_quantidade_estoque_lote(lista_atualizacoes, modo='substituir', descricoes=None, cadastrar_novos=False):
+    """Atualiza quantidades de estoque em lote, com opção de cadastrar produtos novos.
+    lista_atualizacoes: lista de tuplas (codigo, quantidade)
+    modo: 'substituir' - nova quantidade é o valor final
+          'somar' - adiciona à quantidade atual
+    descricoes: dict {codigo: descricao} para cadastro de novos produtos
+    cadastrar_novos: se True, cadastra automaticamente produtos não encontrados
+    Retorna: (atualizados, novos_cadastrados, erros_list)
+      - atualizados: int - quantidade de produtos existentes atualizados
+      - novos_cadastrados: list de codigos cadastrados como novos
+      - erros_list: list de codigos com erro (código vazio, etc.)
+    """
+    conn = get_connection()
+    atualizados = 0
+    novos_cadastrados = []
+    erros = []
+    if descricoes is None:
+        descricoes = {}
+    
+    for codigo, quantidade in lista_atualizacoes:
+        codigo = str(codigo).strip()
+        if not codigo:
+            erros.append(codigo)
+            continue
+        
+        prod = conn.execute("SELECT codigo FROM produtos WHERE codigo = ?", (codigo,)).fetchone()
+        
+        if not prod:
+            if cadastrar_novos:
+                # Cadastrar produto novo automaticamente
+                descricao = descricoes.get(codigo, '').strip()
+                if not descricao:
+                    descricao = f'Produto {codigo}'
+                qtd = int(quantidade)
+                conn.execute(
+                    "INSERT INTO produtos (codigo, descricao, estoque_inicial, estoque_minimo, estoque_maximo) VALUES (?, ?, ?, 0, NULL)",
+                    (codigo, descricao, qtd)
+                )
+                novos_cadastrados.append(codigo)
+                continue
+            else:
+                erros.append(codigo)
+                continue
+        
+        row = conn.execute("""
+            SELECT 
+                p.estoque_inicial,
+                COALESCE(SUM(CASE WHEN n.tipo = 'entrada' THEN in2.quantidade ELSE 0 END), 0) as entradas,
+                COALESCE(SUM(CASE WHEN n.tipo = 'saida' THEN in2.quantidade ELSE 0 END), 0) as saidas
+            FROM produtos p
+            LEFT JOIN itens_nota in2 ON p.codigo = in2.codigo_produto
+            LEFT JOIN notas n ON in2.nota_id = n.id
+            WHERE p.codigo = ?
+            GROUP BY p.codigo
+        """, (codigo,)).fetchone()
+        
+        if row:
+            entradas = row['entradas']
+            saidas = row['saidas']
+            estoque_atual = row['estoque_inicial'] + entradas - saidas
+        else:
+            entradas = 0
+            saidas = 0
+            estoque_atual = 0
+        
+        if modo == 'somar':
+            nova_quantidade = estoque_atual + int(quantidade)
+        else:
+            nova_quantidade = int(quantidade)
+        
+        novo_estoque_inicial = nova_quantidade - entradas + saidas
+        conn.execute("UPDATE produtos SET estoque_inicial = ? WHERE codigo = ?", (novo_estoque_inicial, codigo))
+        atualizados += 1
+    
+    conn.commit()
+    conn.close()
+    return atualizados, novos_cadastrados, erros
+
 
 # ============ FATURAMENTO ============
 def inserir_faturamento(nota_id, data, descricao, regiao, veiculo, valor, cep, bairro, municipio, cliente="", cliente_id=None):
@@ -1218,3 +1372,158 @@ def restaurar_backup(arquivo_bytes):
         if os.path.exists(backup_auto):
             shutil.copy2(backup_auto, db_abs)
         return False, f"Erro ao restaurar: {str(e)}"
+
+
+# ============ FASE 8: USUÁRIOS E PERMISSÕES ============
+
+def _hash_senha(senha):
+    """Gera hash SHA-256 da senha."""
+    import hashlib
+    return hashlib.sha256(senha.encode()).hexdigest()
+
+
+def inserir_usuario(username, senha, nome, email="", perfil="CONVIDADOS"):
+    """Insere um novo usuário. Retorna (sucesso, mensagem)."""
+    conn = get_connection()
+    # Verificar username único
+    existing = conn.execute("SELECT id FROM usuarios WHERE username = ?", (username.strip().lower(),)).fetchone()
+    if existing:
+        conn.close()
+        return False, "Já existe um usuário com esse username."
+    
+    if len(senha) < 6:
+        conn.close()
+        return False, "A senha deve ter no mínimo 6 caracteres."
+    
+    if perfil not in ('ADM', 'FUNCIONARIOS', 'CONVIDADOS'):
+        conn.close()
+        return False, "Perfil inválido."
+    
+    try:
+        conn.execute("""
+            INSERT INTO usuarios (username, password_hash, nome, email, perfil, data_criacao, ativo)
+            VALUES (?, ?, ?, ?, ?, ?, 1)
+        """, (username.strip().lower(), _hash_senha(senha), nome.strip(), email.strip(), 
+              perfil, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+        conn.commit()
+        conn.close()
+        return True, "Usuário criado com sucesso!"
+    except sqlite3.IntegrityError as e:
+        conn.close()
+        return False, f"Erro ao criar usuário: {str(e)}"
+
+
+def atualizar_usuario(usuario_id, **kwargs):
+    """Atualiza dados de um usuário."""
+    conn = get_connection()
+    updates = []
+    params = []
+    campos_permitidos = ['nome', 'email', 'perfil', 'ativo']
+    
+    for campo in campos_permitidos:
+        if campo in kwargs:
+            valor = kwargs[campo]
+            if campo == 'ativo':
+                valor = 1 if valor else 0
+            elif campo == 'perfil' and valor not in ('ADM', 'FUNCIONARIOS', 'CONVIDADOS'):
+                conn.close()
+                return False, "Perfil inválido."
+            else:
+                valor = str(valor).strip() if valor else ""
+            updates.append(f"{campo} = ?")
+            params.append(valor)
+    
+    if updates:
+        params.append(usuario_id)
+        conn.execute(f"UPDATE usuarios SET {', '.join(updates)} WHERE id = ?", params)
+        conn.commit()
+    conn.close()
+    return True, "Usuário atualizado com sucesso!"
+
+
+def resetar_senha_usuario(usuario_id, nova_senha):
+    """Reseta a senha de um usuário."""
+    if len(nova_senha) < 6:
+        return False, "A senha deve ter no mínimo 6 caracteres."
+    conn = get_connection()
+    conn.execute("UPDATE usuarios SET password_hash = ? WHERE id = ?", 
+                 (_hash_senha(nova_senha), usuario_id))
+    conn.commit()
+    conn.close()
+    return True, "Senha resetada com sucesso!"
+
+
+def obter_usuarios(apenas_ativos=False, perfil=None):
+    """Retorna lista de usuários."""
+    conn = get_connection()
+    query = "SELECT id, username, nome, email, perfil, data_criacao, ativo FROM usuarios"
+    conditions = []
+    params = []
+    
+    if apenas_ativos:
+        conditions.append("ativo = 1")
+    if perfil:
+        conditions.append("perfil = ?")
+        params.append(perfil)
+    
+    if conditions:
+        query += " WHERE " + " AND ".join(conditions)
+    query += " ORDER BY nome ASC"
+    
+    rows = conn.execute(query, params).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def buscar_usuario_por_username(username):
+    """Busca usuário pelo username. Retorna dict com todos os campos."""
+    conn = get_connection()
+    row = conn.execute("SELECT * FROM usuarios WHERE username = ?", (username.strip().lower(),)).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def buscar_usuario_por_id(usuario_id):
+    """Busca usuário pelo ID."""
+    conn = get_connection()
+    row = conn.execute("SELECT * FROM usuarios WHERE id = ?", (usuario_id,)).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def verificar_senha(username, password):
+    """Verifica credenciais do usuário. Retorna dict do usuário se válido, None se inválido."""
+    user = buscar_usuario_por_username(username)
+    if not user:
+        return None
+    if not user['ativo']:
+        return None
+    if user['password_hash'] == _hash_senha(password):
+        return user
+    return None
+
+
+def registrar_log_acao(usuario, acao, detalhes=""):
+    """Registra uma ação no log."""
+    conn = get_connection()
+    conn.execute(
+        "INSERT INTO log_acoes (usuario, acao, detalhes, data) VALUES (?, ?, ?, ?)",
+        (usuario, acao, detalhes, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+    )
+    conn.commit()
+    conn.close()
+
+
+def obter_log_acoes(limite=100, usuario=None):
+    """Retorna log de ações."""
+    conn = get_connection()
+    query = "SELECT * FROM log_acoes"
+    params = []
+    if usuario:
+        query += " WHERE usuario = ?"
+        params.append(usuario)
+    query += " ORDER BY data DESC LIMIT ?"
+    params.append(limite)
+    rows = conn.execute(query, params).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
