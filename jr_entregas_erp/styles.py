@@ -67,15 +67,35 @@ def get_css():
 
         /* ===== SIDEBAR (dark corporate) ===== */
         section[data-testid="stSidebar"] {
-            background: linear-gradient(180deg, #0B132B 0%, #1C2541 100%);
+            background: linear-gradient(180deg, #0B132B 0%, #1C2541 100%) !important;
             border-right: 3px solid #F29F05;
             box-shadow: 2px 0 12px rgba(0, 0, 0, 0.15);
             font-family: 'Inter', sans-serif;
         }
+        /* FORÇA BRANCO em TODOS os elementos da sidebar */
+        section[data-testid="stSidebar"],
+        section[data-testid="stSidebar"] * {
+            color: #FFFFFF !important;
+        }
+        [data-testid="stSidebar"] {
+            background: linear-gradient(180deg, #0B132B 0%, #1C2541 100%) !important;
+        }
+        [data-testid="stSidebar"] * {
+            color: #FFFFFF !important;
+        }
+        [data-testid="stSidebar"] [data-testid="stSidebarContent"] {
+            background: transparent !important;
+        }
+        [data-testid="stSidebar"] [data-testid="stSidebarContent"] * {
+            color: #FFFFFF !important;
+        }
         /* Sidebar titles - Poppins, laranja */
         section[data-testid="stSidebar"] .stMarkdown h1,
         section[data-testid="stSidebar"] .stMarkdown h2,
-        section[data-testid="stSidebar"] .stMarkdown h3 {
+        section[data-testid="stSidebar"] .stMarkdown h3,
+        [data-testid="stSidebar"] h1,
+        [data-testid="stSidebar"] h2,
+        [data-testid="stSidebar"] h3 {
             font-family: 'Poppins', sans-serif !important;
             color: #F29F05 !important;
             font-weight: 700 !important;
@@ -86,7 +106,11 @@ def get_css():
         section[data-testid="stSidebar"] .stMarkdown span,
         section[data-testid="stSidebar"] .stMarkdown label,
         section[data-testid="stSidebar"] label,
-        section[data-testid="stSidebar"] .stMarkdown div {
+        section[data-testid="stSidebar"] .stMarkdown div,
+        [data-testid="stSidebar"] p,
+        [data-testid="stSidebar"] span,
+        [data-testid="stSidebar"] label,
+        [data-testid="stSidebar"] div {
             color: #FFFFFF !important;
             font-weight: 500 !important;
             font-size: 0.95rem;
@@ -94,7 +118,9 @@ def get_css():
         }
         /* Sidebar bold text */
         section[data-testid="stSidebar"] .stMarkdown strong,
-        section[data-testid="stSidebar"] .stMarkdown b {
+        section[data-testid="stSidebar"] .stMarkdown b,
+        [data-testid="stSidebar"] strong,
+        [data-testid="stSidebar"] b {
             color: #FFFFFF !important;
             font-weight: 700 !important;
         }
@@ -102,7 +128,12 @@ def get_css():
             border-color: rgba(242, 159, 5, 0.3);
         }
         /* Sidebar radio items */
-        section[data-testid="stSidebar"] .stRadio label {
+        section[data-testid="stSidebar"] .stRadio label,
+        [data-testid="stSidebar"] .stRadio label,
+        [data-testid="stSidebar"] .stRadio label span,
+        [data-testid="stSidebar"] .stRadio label p,
+        [data-testid="stSidebar"] .stRadio div[role="radiogroup"] label,
+        [data-testid="stSidebar"] .stRadio div[role="radiogroup"] label * {
             color: #FFFFFF !important;
             font-weight: 500 !important;
             font-size: 0.95rem;
@@ -111,24 +142,32 @@ def get_css():
             transition: all 0.25s ease;
             line-height: 1.5;
         }
-        section[data-testid="stSidebar"] .stRadio label:hover {
+        section[data-testid="stSidebar"] .stRadio label:hover,
+        [data-testid="stSidebar"] .stRadio label:hover,
+        [data-testid="stSidebar"] .stRadio label:hover * {
             background-color: rgba(242, 159, 5, 0.15);
             color: #F29F05 !important;
         }
         section[data-testid="stSidebar"] .stRadio [data-checked="true"] + label,
-        section[data-testid="stSidebar"] .stRadio label[data-checked="true"] {
+        section[data-testid="stSidebar"] .stRadio label[data-checked="true"],
+        [data-testid="stSidebar"] .stRadio [aria-checked="true"],
+        [data-testid="stSidebar"] .stRadio [aria-checked="true"] + label,
+        [data-testid="stSidebar"] .stRadio [aria-checked="true"] ~ label,
+        [data-testid="stSidebar"] .stRadio [data-checked="true"] + label * {
             background-color: rgba(242, 159, 5, 0.2);
             color: #F29F05 !important;
             font-weight: 600 !important;
             border-left: 3px solid #F29F05;
         }
-        section[data-testid="stSidebar"] hr {
+        section[data-testid="stSidebar"] hr,
+        [data-testid="stSidebar"] hr {
             border-color: rgba(255, 255, 255, 0.12);
             opacity: 0.7;
         }
         /* Sidebar button */
-        section[data-testid="stSidebar"] .stButton > button {
-            background-color: #F29F05;
+        section[data-testid="stSidebar"] .stButton > button,
+        [data-testid="stSidebar"] .stButton > button {
+            background-color: #F29F05 !important;
             color: #0B132B !important;
             border: none;
             font-family: 'Inter', sans-serif;
@@ -138,22 +177,34 @@ def get_css():
             padding: 0.6rem 1.2rem;
             transition: all 0.25s ease;
         }
-        section[data-testid="stSidebar"] .stButton > button:hover {
-            background-color: #FFAF1A;
+        section[data-testid="stSidebar"] .stButton > button:hover,
+        [data-testid="stSidebar"] .stButton > button:hover {
+            background-color: #FFAF1A !important;
             color: #0B132B !important;
             box-shadow: 0 4px 16px rgba(242, 159, 5, 0.35);
             transform: translateY(-1px);
         }
+        /* Sidebar selectbox, inputs - texto branco */
+        [data-testid="stSidebar"] .stSelectbox label,
+        [data-testid="stSidebar"] .stTextInput label,
+        [data-testid="stSidebar"] .stNumberInput label,
+        [data-testid="stSidebar"] .stDateInput label,
+        [data-testid="stSidebar"] .stCheckbox label {
+            color: #FFFFFF !important;
+        }
 
         /* ===== HEADER ===== */
         .main-header {
-            background: linear-gradient(135deg, #0B132B 0%, #1C2541 100%);
-            color: #FFFFFF;
+            background: linear-gradient(135deg, #0B132B 0%, #1C2541 100%) !important;
+            color: #FFFFFF !important;
             padding: 1.8rem 2rem;
             border-radius: 14px;
             margin-bottom: 1.5rem;
             border-left: 5px solid #F29F05;
             box-shadow: 0 4px 20px rgba(11, 19, 43, 0.18);
+        }
+        .main-header * {
+            color: #FFFFFF !important;
         }
         .main-header h1 {
             font-family: 'Poppins', sans-serif !important;
@@ -163,9 +214,16 @@ def get_css():
             font-weight: 700;
             letter-spacing: -0.01em;
         }
-        .main-header p {
+        .main-header h2, .main-header h3,
+        .main-header h4, .main-header h5 {
+            font-family: 'Poppins', sans-serif !important;
+            color: #F29F05 !important;
+            font-weight: 600 !important;
+        }
+        .main-header p, .main-header span,
+        .main-header div, .main-header label {
             font-family: 'Inter', sans-serif;
-            color: #E2E8F0;
+            color: #E2E8F0 !important;
             margin: 0.4rem 0 0 0;
             font-size: 0.95rem;
             font-weight: 400;
@@ -237,10 +295,13 @@ def get_css():
 
         /* ===== DARK BACKGROUND CARDS (fundos azuis) ===== */
         .dark-card {
-            background: linear-gradient(135deg, #0B132B 0%, #1C2541 100%);
+            background: linear-gradient(135deg, #0B132B 0%, #1C2541 100%) !important;
             border-radius: 14px;
             padding: 1.5rem;
-            color: #FFFFFF;
+            color: #FFFFFF !important;
+        }
+        .dark-card * {
+            color: #FFFFFF !important;
         }
         .dark-card h1, .dark-card h2, .dark-card h3,
         .dark-card h4, .dark-card h5, .dark-card h6 {
@@ -253,6 +314,14 @@ def get_css():
             color: #FFFFFF !important;
             font-weight: 500;
             line-height: 1.6;
+        }
+
+        /* ===== REGRA GERAL: qualquer fundo azul escuro = texto branco ===== */
+        [style*="background"][style*="#0B132B"] *,
+        [style*="background"][style*="#1C2541"] *,
+        [style*="background-color"][style*="#0B132B"] *,
+        [style*="background-color"][style*="#1C2541"] * {
+            color: #FFFFFF !important;
         }
 
         /* ===== BUTTONS ===== */
@@ -413,10 +482,15 @@ def get_css():
             font-family: 'Inter', sans-serif;
         }
 
-        /* ===== SELECTBOX & INPUTS ===== */
-        .stSelectbox label, .stTextInput label, .stNumberInput label,
-        .stDateInput label, .stFileUploader label, .stTextArea label,
-        .stRadio > label, .stCheckbox label {
+        /* ===== SELECTBOX & INPUTS (main content area only) ===== */
+        [data-testid="stAppViewContainer"] .stSelectbox label,
+        [data-testid="stAppViewContainer"] .stTextInput label,
+        [data-testid="stAppViewContainer"] .stNumberInput label,
+        [data-testid="stAppViewContainer"] .stDateInput label,
+        [data-testid="stAppViewContainer"] .stFileUploader label,
+        [data-testid="stAppViewContainer"] .stTextArea label,
+        [data-testid="stAppViewContainer"] .stRadio > label,
+        [data-testid="stAppViewContainer"] .stCheckbox label {
             font-family: 'Inter', sans-serif !important;
             color: #2D3748 !important;
             font-weight: 500 !important;
