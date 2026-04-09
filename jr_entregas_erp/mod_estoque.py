@@ -2,12 +2,14 @@ import streamlit as st
 import pandas as pd
 import io
 from styles import page_header, metric_card
+from datetime import datetime as _dt
 from database import (
     get_estoque, atualizar_estoque_inicial, get_produtos,
     atualizar_limites_estoque, atualizar_limites_estoque_lote,
-    obter_produtos_estoque_baixo
+    obter_produtos_estoque_baixo, produto_existe,
+    atualizar_quantidade_estoque_lote
 )
-from auth import is_admin
+from auth import is_admin, pode_editar, pode_excluir, verificar_acesso, get_user_perfil
 
 # Cores corporativas
 COR_AZUL = "#0B132B"
@@ -46,6 +48,9 @@ def _estilo_linha(row):
 
 
 def render():
+    if not verificar_acesso('estoque'):
+        return
+    
     st.markdown(page_header("📦 Controle de Estoque", "Visualize e gerencie o estoque de produtos"), unsafe_allow_html=True)
     
     estoque = get_estoque()
@@ -56,9 +61,20 @@ def render():
     
     df = pd.DataFrame(estoque)
     
-    # Tabs principais
+    # CONVIDADOS: apenas Visão Geral (somente leitura)
+    perfil = get_user_perfil()
+    if perfil == 'CONVIDADOS':
+        st.info("👁️ Modo somente visualização — seu perfil permite apenas consultar dados.")
+        tab_visao, tab_relatorio = st.tabs(["📊 Visão Geral", "📈 Relatório"])
+        with tab_visao:
+            _render_visao_geral(df)
+        with tab_relatorio:
+            _render_relatorio(df)
+        return
+    
+    # FUNCIONARIOS e ADM: todas as abas
     tab_visao, tab_limites, tab_lote, tab_relatorio = st.tabs([
-        "📊 Visão Geral", "⚙️ Limites de Estoque", "📋 Edição em Lote", "📈 Relatório"
+        "📊 Visão Geral", "⚙️ Limites de Estoque", "📋 EDIÇÃO DE ESTOQUE", "📈 Relatório"
     ])
     
     with tab_visao:
@@ -360,11 +376,12 @@ def _render_limites_estoque(df):
 
 
 def _render_edicao_lote(df):
-    """Aba para edição em lote dos limites de estoque."""
-    st.markdown("#### 📋 Edição em Lote de Limites de Estoque")
+    """Aba para edição de estoque (quantidades)."""
+    st.markdown("#### 📋 EDIÇÃO DE ESTOQUE")
+    st.caption("Atualize as quantidades do estoque via upload de planilha ou edição direta na tabela.")
     
     if not is_admin():
-        st.warning("🔒 Apenas administradores podem editar os limites de estoque.")
+        st.warning("🔒 Apenas administradores podem editar o estoque.")
         return
     
     opcao = st.radio(
@@ -380,16 +397,29 @@ def _render_edicao_lote(df):
         _render_tabela_editavel(df)
 
 
+def _normalizar_coluna(colunas, aliases):
+    """Busca uma coluna pelo nome, tentando vários aliases (case-insensitive)."""
+    for col in colunas:
+        if col.strip().lower() in [a.lower() for a in aliases]:
+            return col
+    return None
+
+
 def _render_upload_lote(df):
-    """Upload de arquivo Excel para atualização em lote."""
-    st.markdown("##### 📤 Upload de Arquivo Excel")
-    st.info("💡 O arquivo deve conter as colunas: **codigo**, **estoque_minimo**, **estoque_maximo** (opcional).")
+    """Upload de arquivo Excel para atualização de quantidades de estoque."""
+    st.markdown("##### 📤 Upload via Excel")
+    st.info(
+        "💡 O arquivo deve conter as colunas: **CÓDIGO** (coluna 1), **DESCRIÇÃO** (coluna 2) e **QUANTIDADE** (coluna 3).\n\n"
+        "Outras colunas serão **ignoradas** automaticamente.\n\n"
+        "➕ Produtos com códigos **novos** serão **cadastrados automaticamente** no sistema."
+    )
     
     # Botão para baixar modelo
     modelo = pd.DataFrame({
-        'codigo': df['codigo'].head(5).tolist() if not df.empty else ['P000001'],
-        'estoque_minimo': [10] * min(5, len(df)),
-        'estoque_maximo': [100] * min(5, len(df)),
+        'CODIGO': df['codigo'].head(5).tolist() if not df.empty else ['P000001'],
+        'DESCRICAO': [next((r['descricao'] for _, r in df.iterrows() if r['codigo'] == c), '') 
+                      for c in (df['codigo'].head(5).tolist() if not df.empty else ['P000001'])],
+        'QUANTIDADE': [0] * min(5, max(len(df), 1)),
     })
     
     buffer_modelo = io.BytesIO()
@@ -399,42 +429,94 @@ def _render_upload_lote(df):
     st.download_button(
         "📥 Baixar Modelo Excel",
         data=buffer_modelo,
-        file_name="modelo_limites_estoque.xlsx",
+        file_name="modelo_edicao_estoque.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         key="btn_modelo_lote"
     )
     
-    uploaded = st.file_uploader("Selecione o arquivo Excel", type=["xlsx", "xls"], key="upload_lote_estoque")
+    uploaded = st.file_uploader("Selecione o arquivo Excel (.xlsx, .xls)", type=["xlsx", "xls"], key="upload_lote_estoque")
     
     if uploaded:
         try:
             df_upload = pd.read_excel(uploaded)
             
-            # Validar colunas
-            if 'codigo' not in df_upload.columns or 'estoque_minimo' not in df_upload.columns:
-                st.error("❌ O arquivo deve conter pelo menos as colunas 'codigo' e 'estoque_minimo'.")
+            # Mapear colunas com aliases flexíveis
+            col_codigo = _normalizar_coluna(df_upload.columns, ['codigo', 'código', 'cod', 'code', 'CODIGO', 'CÓDIGO', 'COD', 'CODE'])
+            col_descricao = _normalizar_coluna(df_upload.columns, ['descricao', 'descrição', 'descricão', 'produto', 'nome', 'DESCRICAO', 'DESCRIÇÃO', 'PRODUTO', 'NOME'])
+            col_quantidade = _normalizar_coluna(df_upload.columns, ['quantidade', 'qtd', 'estoque', 'qty', 'QUANTIDADE', 'QTD', 'ESTOQUE', 'QTY'])
+            
+            if not col_codigo:
+                st.error("❌ Coluna de **CÓDIGO** não encontrada. Use uma das variações: codigo, código, cod, code.")
+                return
+            if not col_quantidade:
+                st.error("❌ Coluna de **QUANTIDADE** não encontrada. Use uma das variações: quantidade, qtd, estoque, qty.")
                 return
             
-            # Preparar dados
-            df_upload['codigo'] = df_upload['codigo'].astype(str).str.strip()
-            df_upload['estoque_minimo'] = pd.to_numeric(df_upload['estoque_minimo'], errors='coerce').fillna(0).astype(int)
+            # Extrair apenas as 3 colunas necessárias
+            cols_usar = [col_codigo]
+            if col_descricao:
+                cols_usar.append(col_descricao)
+            cols_usar.append(col_quantidade)
             
-            if 'estoque_maximo' in df_upload.columns:
-                df_upload['estoque_maximo'] = pd.to_numeric(df_upload['estoque_maximo'], errors='coerce')
+            df_proc = df_upload[cols_usar].copy()
+            df_proc = df_proc.rename(columns={
+                col_codigo: 'CODIGO',
+                col_quantidade: 'QUANTIDADE'
+            })
+            if col_descricao:
+                df_proc = df_proc.rename(columns={col_descricao: 'DESCRICAO'})
             else:
-                df_upload['estoque_maximo'] = None
+                df_proc['DESCRICAO'] = ''
             
-            # Validar dados
+            # Limpar dados
+            df_proc['CODIGO'] = df_proc['CODIGO'].astype(str).str.strip()
+            df_proc['QUANTIDADE'] = pd.to_numeric(df_proc['QUANTIDADE'], errors='coerce').fillna(0).astype(int)
+            
+            # Validações
             erros_val = []
-            for _, row in df_upload.iterrows():
-                cod = row['codigo']
-                est_min = row['estoque_minimo']
-                est_max = row.get('estoque_maximo', None)
+            nao_encontrados = []
+            codigos_vazios = []
+            codigos_duplicados = []
+            
+            # Criar mapa de estoque atual para referência
+            estoque_map = {r['codigo']: r['estoque_atual'] for _, r in df.iterrows()}
+            descricao_map = {r['codigo']: r['descricao'] for _, r in df.iterrows()}
+            
+            # Verificar códigos duplicados no Excel
+            codigos_excel = df_proc['CODIGO'].tolist()
+            vistos = set()
+            for cod in codigos_excel:
+                if cod in vistos and cod not in codigos_duplicados:
+                    codigos_duplicados.append(cod)
+                vistos.add(cod)
+            
+            if codigos_duplicados:
+                st.warning(f"⚠️ Códigos **duplicados** no Excel (será usada a última ocorrência): {', '.join(codigos_duplicados)}")
+                df_proc = df_proc.drop_duplicates(subset='CODIGO', keep='last')
+            
+            for idx, row in df_proc.iterrows():
+                cod = row['CODIGO']
+                qtd = row['QUANTIDADE']
+                desc = row['DESCRICAO']
                 
-                if est_min < 0:
-                    erros_val.append(f"{cod}: estoque mínimo não pode ser negativo")
-                if pd.notna(est_max) and est_max is not None and est_min >= est_max:
-                    erros_val.append(f"{cod}: estoque mínimo ({est_min}) deve ser menor que máximo ({int(est_max)})")
+                # Validar código vazio
+                if not cod or cod.lower() == 'nan':
+                    codigos_vazios.append(f"Linha {idx+1}")
+                    continue
+                
+                if qtd < 0:
+                    erros_val.append(f"Linha {idx+1} - {cod}: quantidade não pode ser negativa ({qtd})")
+                
+                if not produto_existe(cod):
+                    # Validar que produtos novos tenham descrição
+                    if not desc or str(desc).strip() == '' or str(desc).lower() == 'nan':
+                        erros_val.append(f"Linha {idx+1} - {cod}: produto novo precisa de **DESCRIÇÃO** preenchida")
+                    else:
+                        nao_encontrados.append(cod)
+            
+            if codigos_vazios:
+                st.warning(f"⚠️ {len(codigos_vazios)} linha(s) com código vazio serão ignoradas: {', '.join(codigos_vazios)}")
+                df_proc = df_proc[df_proc['CODIGO'].str.strip().ne('') & df_proc['CODIGO'].str.lower().ne('nan')]
             
             if erros_val:
                 st.error("❌ Erros de validação encontrados:")
@@ -442,46 +524,200 @@ def _render_upload_lote(df):
                     st.markdown(f"  - {e}")
                 return
             
-            # Preview
-            st.markdown("##### 📋 Resumo das Alterações")
-            st.dataframe(df_upload, use_container_width=True, hide_index=True)
-            st.markdown(f"**{len(df_upload)} produtos** serão atualizados.")
+            # Adicionar info de estoque atual ao preview
+            df_proc['EST. ATUAL'] = df_proc['CODIGO'].map(estoque_map).fillna(0).astype(int)
+            # Preencher descrição do banco se produto já existe e não veio no Excel
+            for idx, row in df_proc.iterrows():
+                cod = row['CODIGO']
+                if cod not in nao_encontrados and (not row['DESCRICAO'] or str(row['DESCRICAO']).strip() == ''):
+                    df_proc.at[idx, 'DESCRICAO'] = descricao_map.get(cod, '')
             
-            if st.button("✅ Confirmar Atualização em Lote", type="primary", key="btn_confirmar_lote"):
-                lista = []
-                for _, row in df_upload.iterrows():
-                    est_max = row.get('estoque_maximo', None)
-                    est_max_val = int(est_max) if pd.notna(est_max) else None
-                    lista.append((row['codigo'], int(row['estoque_minimo']), est_max_val))
+            # Marcar status de cada produto para o preview
+            df_proc['STATUS'] = df_proc['CODIGO'].apply(lambda c: '➕ NOVO' if c in nao_encontrados else '✅ Existente')
+            
+            # Informar sobre produtos novos
+            if nao_encontrados:
+                st.info(f"➕ **{len(nao_encontrados)}** produto(s) novo(s) serão **cadastrados automaticamente**: {', '.join(nao_encontrados)}")
+            
+            existentes = df_proc[~df_proc['CODIGO'].isin(nao_encontrados)]
+            novos = df_proc[df_proc['CODIGO'].isin(nao_encontrados)]
+            
+            if df_proc.empty:
+                st.error("❌ Nenhum produto válido para processar.")
+                return
+            
+            # Preview dos dados
+            st.markdown("##### 📋 Preview dos dados importados")
+            st.dataframe(
+                df_proc[['STATUS', 'CODIGO', 'DESCRICAO', 'EST. ATUAL', 'QUANTIDADE']],
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    'STATUS': st.column_config.TextColumn("Status", width="small"),
+                    'CODIGO': st.column_config.TextColumn("Código", width="small"),
+                    'DESCRICAO': st.column_config.TextColumn("Descrição", width="large"),
+                    'EST. ATUAL': st.column_config.NumberColumn("Est. Atual", width="small"),
+                    'QUANTIDADE': st.column_config.NumberColumn("Qtd. Excel", width="small"),
+                }
+            )
+            
+            # Resumo quantitativo
+            col_res1, col_res2 = st.columns(2)
+            with col_res1:
+                st.markdown(f"✅ **{len(existentes)}** produto(s) existente(s) para atualizar")
+            with col_res2:
+                st.markdown(f"➕ **{len(novos)}** produto(s) novo(s) para cadastrar")
+            
+            # Salvar dados no session_state para uso nos botões
+            st.session_state['_upload_estoque_data'] = df_proc.copy()
+            st.session_state['_upload_estoque_novos'] = nao_encontrados.copy()
+            
+            # Diálogo de escolha
+            st.markdown("---")
+            st.markdown("##### ⚡ Escolha como aplicar os dados:")
+            st.caption("💡 Produtos **novos** serão cadastrados com a quantidade do Excel independente do modo escolhido.")
+            
+            col_info1, col_info2 = st.columns(2)
+            with col_info1:
+                st.markdown(
+                    f"""<div style='background: rgba(56,161,105,0.1); border-left: 4px solid {COR_VERDE}; 
+                    padding: 12px 15px; border-radius: 4px;'>
+                    <strong>🔢 SOMAR DADOS</strong><br>
+                    <small>Adiciona a quantidade do Excel à quantidade <strong>atual</strong> no banco.<br>
+                    Ex: Atual 10 + Excel 5 = <strong>15</strong></small>
+                    </div>""",
+                    unsafe_allow_html=True
+                )
+            with col_info2:
+                st.markdown(
+                    f"""<div style='background: rgba(66,153,225,0.1); border-left: 4px solid #4299E1; 
+                    padding: 12px 15px; border-radius: 4px;'>
+                    <strong>🔄 INSERIR NOVO</strong><br>
+                    <small>Substitui a quantidade atual pela quantidade do Excel.<br>
+                    Ex: Atual 10 → Excel 5 = <strong>5</strong></small>
+                    </div>""",
+                    unsafe_allow_html=True
+                )
+            
+            st.markdown("<div style='height: 10px'></div>", unsafe_allow_html=True)
+            
+            col_btn1, col_btn2, col_btn3 = st.columns([1, 1, 2])
+            
+            with col_btn1:
+                btn_somar = st.button("🔢 SOMAR DADOS", type="primary", key="btn_somar_estoque", use_container_width=True)
+            with col_btn2:
+                btn_inserir = st.button("🔄 INSERIR NOVO", type="secondary", key="btn_inserir_estoque", use_container_width=True)
+            
+            if btn_somar or btn_inserir:
+                dados = st.session_state.get('_upload_estoque_data', df_proc)
+                lista_novos = st.session_state.get('_upload_estoque_novos', nao_encontrados)
+                modo = 'somar' if btn_somar else 'substituir'
+                modo_label = 'SOMAR DADOS' if btn_somar else 'INSERIR NOVO'
                 
-                atualizados, erros = atualizar_limites_estoque_lote(lista)
+                # Montar dicionário de descrições para cadastro de novos
+                descricoes_map = {row['CODIGO']: row['DESCRICAO'] for _, row in dados.iterrows()}
+                
+                lista = [(row['CODIGO'], row['QUANTIDADE']) for _, row in dados.iterrows()]
+                atualizados, novos_cadastrados, erros = atualizar_quantidade_estoque_lote(
+                    lista, modo=modo, descricoes=descricoes_map, cadastrar_novos=True
+                )
+                
+                # Gerar log de atualização
+                log_data = []
+                estoque_novo_map = {r['codigo']: r['estoque_atual'] for r in get_estoque()}
+                for _, row in dados.iterrows():
+                    cod = row['CODIGO']
+                    if cod in [e for e in erros]:
+                        log_data.append({
+                            'Código': cod,
+                            'Descrição': row['DESCRICAO'],
+                            'Qtd. Anterior': '-',
+                            'Qtd. Excel': int(row['QUANTIDADE']),
+                            'Qtd. Nova': '-',
+                            'Modo': modo_label,
+                            'Status': '❌ Erro'
+                        })
+                    elif cod in novos_cadastrados:
+                        log_data.append({
+                            'Código': cod,
+                            'Descrição': row['DESCRICAO'],
+                            'Qtd. Anterior': 0,
+                            'Qtd. Excel': int(row['QUANTIDADE']),
+                            'Qtd. Nova': int(row['QUANTIDADE']),
+                            'Modo': modo_label,
+                            'Status': '➕ Novo'
+                        })
+                    else:
+                        ant = row['EST. ATUAL']
+                        if modo == 'somar':
+                            novo = ant + row['QUANTIDADE']
+                        else:
+                            novo = row['QUANTIDADE']
+                        log_data.append({
+                            'Código': cod,
+                            'Descrição': row['DESCRICAO'],
+                            'Qtd. Anterior': int(ant),
+                            'Qtd. Excel': int(row['QUANTIDADE']),
+                            'Qtd. Nova': int(novo),
+                            'Modo': modo_label,
+                            'Status': '✅ Atualizado'
+                        })
+                
+                # Exibir resultados separados
+                if novos_cadastrados:
+                    st.success(f"➕ **{len(novos_cadastrados)}** produto(s) novo(s) cadastrado(s) automaticamente!")
                 
                 if atualizados > 0:
-                    st.success(f"✅ {atualizados} produtos atualizados com sucesso!")
+                    st.success(f"✅ **{atualizados}** produto(s) existente(s) atualizado(s) com sucesso! (Modo: {modo_label})")
+                
                 if erros:
-                    st.warning(f"⚠️ {len(erros)} códigos não encontrados: {', '.join(erros)}")
-                st.rerun()
+                    st.error(f"❌ **{len(erros)}** código(s) com erro: {', '.join(erros)}")
+                
+                if not novos_cadastrados and atualizados == 0:
+                    st.warning("⚠️ Nenhum produto foi processado.")
+                
+                # Tabela de resumo
+                if log_data:
+                    st.markdown("##### 📊 Resumo da Atualização")
+                    df_log = pd.DataFrame(log_data)
+                    st.dataframe(df_log, use_container_width=True, hide_index=True)
+                    
+                    # Download do log
+                    buffer_log = io.BytesIO()
+                    df_log.to_excel(buffer_log, index=False, engine='openpyxl')
+                    buffer_log.seek(0)
+                    
+                    st.download_button(
+                        "📥 Baixar Log de Atualização",
+                        data=buffer_log,
+                        file_name=f"log_atualizacao_estoque_{_dt.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        key="btn_download_log"
+                    )
+                
+                # Limpar dados do session_state
+                for key in ['_upload_estoque_data', '_upload_estoque_novos']:
+                    if key in st.session_state:
+                        del st.session_state[key]
                 
         except Exception as e:
             st.error(f"❌ Erro ao processar arquivo: {str(e)}")
 
 
 def _render_tabela_editavel(df):
-    """Tabela editável para atualização em massa."""
-    st.markdown("##### ✏️ Edição em Massa")
-    st.caption("Edite os valores diretamente na tabela abaixo e clique em 'Salvar Alterações'.")
+    """Tabela editável para atualização em massa de quantidades."""
+    st.markdown("##### ✏️ Edição em massa (tabela)")
+    st.caption("Altere os valores na coluna **EST. ATUALIZADO** com a quantidade real final desejada e clique em 'Salvar Alterações'.")
     
     # Preparar DataFrame editável
-    df_edit = df[['codigo', 'descricao', 'estoque_atual', 'estoque_minimo', 'estoque_maximo']].copy()
-    df_edit['estoque_minimo'] = df_edit['estoque_minimo'].fillna(0).astype(int)
-    df_edit['estoque_maximo'] = df_edit['estoque_maximo'].apply(lambda x: int(x) if pd.notna(x) and x is not None else None)
+    df_edit = df[['codigo', 'descricao', 'estoque_atual']].copy()
+    df_edit['estoque_atualizado'] = df_edit['estoque_atual'].astype(int)
     
     df_edit = df_edit.rename(columns={
         'codigo': 'Código',
         'descricao': 'Descrição',
         'estoque_atual': 'Est. Atual',
-        'estoque_minimo': 'Est. Mínimo',
-        'estoque_maximo': 'Est. Máximo'
+        'estoque_atualizado': 'EST. ATUALIZADO'
     })
     
     edited_df = st.data_editor(
@@ -493,39 +729,72 @@ def _render_tabela_editavel(df):
             'Código': st.column_config.TextColumn(width="small"),
             'Descrição': st.column_config.TextColumn(width="large"),
             'Est. Atual': st.column_config.NumberColumn(width="small"),
-            'Est. Mínimo': st.column_config.NumberColumn(width="small", min_value=0),
-            'Est. Máximo': st.column_config.NumberColumn(width="small", min_value=0),
+            'EST. ATUALIZADO': st.column_config.NumberColumn(width="small", min_value=0),
         },
         key="editor_lote_estoque"
     )
     
     if st.button("💾 Salvar Alterações", type="primary", key="btn_salvar_lote_tabela"):
-        # Validar e salvar
+        # Filtrar apenas produtos que foram alterados
         erros_val = []
         lista = []
+        log_data = []
         
-        for _, row in edited_df.iterrows():
+        for idx, row in edited_df.iterrows():
             cod = row['Código']
-            est_min = int(row['Est. Mínimo']) if pd.notna(row['Est. Mínimo']) else 0
-            est_max = int(row['Est. Máximo']) if pd.notna(row['Est. Máximo']) else None
+            est_atual = int(row['Est. Atual'])
+            est_novo = int(row['EST. ATUALIZADO']) if pd.notna(row['EST. ATUALIZADO']) else est_atual
             
-            if est_min < 0:
-                erros_val.append(f"{cod}: estoque mínimo não pode ser negativo")
-            if est_max is not None and est_min >= est_max:
-                erros_val.append(f"{cod}: estoque mínimo ({est_min}) deve ser menor que máximo ({est_max})")
+            if est_novo < 0:
+                erros_val.append(f"{cod}: quantidade não pode ser negativa ({est_novo})")
+                continue
             
-            lista.append((cod, est_min, est_max))
+            # Só atualizar se houve alteração
+            if est_novo != est_atual:
+                lista.append((cod, est_novo))
+                log_data.append({
+                    'Código': cod,
+                    'Descrição': row['Descrição'],
+                    'Qtd. Anterior': est_atual,
+                    'Qtd. Nova': est_novo,
+                    'Diferença': est_novo - est_atual
+                })
         
         if erros_val:
             st.error("❌ Erros de validação:")
             for e in erros_val:
                 st.markdown(f"  - {e}")
+        elif not lista:
+            st.info("ℹ️ Nenhuma alteração detectada. Modifique os valores na coluna **EST. ATUALIZADO** antes de salvar.")
         else:
-            atualizados, erros = atualizar_limites_estoque_lote(lista)
+            # Confirmar antes de salvar
+            atualizados, _novos, erros = atualizar_quantidade_estoque_lote(lista, modo='substituir')
+            
             if atualizados > 0:
-                st.success(f"✅ {atualizados} produtos atualizados com sucesso!")
+                st.success(f"✅ **{atualizados}** produtos atualizados com sucesso!")
+                
+                # Resumo
+                if log_data:
+                    st.markdown("##### 📊 Resumo da Atualização")
+                    df_log = pd.DataFrame(log_data)
+                    st.dataframe(df_log, use_container_width=True, hide_index=True)
+                    
+                    # Download do log
+                    buffer_log = io.BytesIO()
+                    df_log.to_excel(buffer_log, index=False, engine='openpyxl')
+                    buffer_log.seek(0)
+                    
+                    st.download_button(
+                        "📥 Baixar Log de Atualização",
+                        data=buffer_log,
+                        file_name=f"log_edicao_estoque_{_dt.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        key="btn_download_log_tabela"
+                    )
+            
             if erros:
-                st.warning(f"⚠️ {len(erros)} códigos não encontrados: {', '.join(erros)}")
+                st.warning(f"⚠️ {len(erros)} código(s) não encontrados: {', '.join(erros)}")
+            
             st.rerun()
 
 
