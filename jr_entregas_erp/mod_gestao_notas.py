@@ -2,18 +2,32 @@ import streamlit as st
 import pandas as pd
 from styles import page_header, metric_card
 from database import get_notas, get_itens_nota, excluir_nota, get_notas_excluidas
-from auth import get_username
+from auth import get_username, pode_editar, pode_excluir, verificar_acesso, get_user_perfil
 
 
 def render():
+    if not verificar_acesso('gestao_notas'):
+        return
+    
     st.markdown(page_header("📋 Gestão de Notas", "Visualize, gerencie e exclua notas fiscais processadas"), unsafe_allow_html=True)
     
-    tab1, tab2 = st.tabs(["📄 Notas Processadas", "🗑️ Histórico de Exclusões"])
+    perfil = get_user_perfil()
     
-    with tab1:
+    if perfil == 'CONVIDADOS':
+        st.info("👁️ Modo somente visualização — seu perfil permite apenas consultar dados.")
+        # Apenas a lista de notas, sem ações
         _render_notas_processadas()
-    with tab2:
-        _render_historico_exclusoes()
+        return
+    
+    if pode_excluir():
+        tab1, tab2 = st.tabs(["📄 Notas Processadas", "🗑️ Histórico de Exclusões"])
+        with tab1:
+            _render_notas_processadas()
+        with tab2:
+            _render_historico_exclusoes()
+    else:
+        # FUNCIONARIOS: sem aba de exclusões
+        _render_notas_processadas()
 
 
 def _render_notas_processadas():
@@ -129,17 +143,18 @@ def _render_notas_processadas():
                 })
                 st.dataframe(df_itens_display, use_container_width=True, hide_index=True)
             
-            # Delete button
-            st.markdown("---")
-            col_d1, col_d2 = st.columns([3, 1])
-            with col_d1:
-                motivo = st.text_input("Motivo da exclusão (opcional)", key=f"motivo_{nota['id']}")
-            with col_d2:
-                st.markdown("<br>", unsafe_allow_html=True)
-                if st.button("🗑️ Excluir Nota", key=f"btn_del_{nota['id']}", type="primary"):
-                    excluir_nota(nota['id'], motivo=motivo, usuario=get_username())
-                    st.success(f"✅ Nota {nota['numero']} excluída com estorno automático no estoque e financeiro.")
-                    st.rerun()
+            # Delete button - apenas ADM
+            if pode_excluir():
+                st.markdown("---")
+                col_d1, col_d2 = st.columns([3, 1])
+                with col_d1:
+                    motivo = st.text_input("Motivo da exclusão (opcional)", key=f"motivo_{nota['id']}")
+                with col_d2:
+                    st.markdown("<br>", unsafe_allow_html=True)
+                    if st.button("🗑️ Excluir Nota", key=f"btn_del_{nota['id']}", type="primary"):
+                        excluir_nota(nota['id'], motivo=motivo, usuario=get_username())
+                        st.success(f"✅ Nota {nota['numero']} excluída com estorno automático no estoque e financeiro.")
+                        st.rerun()
 
 
 def _render_historico_exclusoes():
