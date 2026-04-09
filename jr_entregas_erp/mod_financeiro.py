@@ -27,6 +27,9 @@ COR_AZUL_MEDIO = "#3182CE"
 
 
 def render():
+    from auth import verificar_acesso, pode_editar, pode_excluir, get_user_perfil
+    if not verificar_acesso('financeiro'):
+        return
     st.markdown(page_header("💰 Financeiro", "Faturamento, custos, categorias, contas e relatórios financeiros"), unsafe_allow_html=True)
     
     # Atualizar status de contas atrasadas ao carregar
@@ -368,10 +371,12 @@ def _render_faturamento():
                     st.success("✅ Faturamento atualizado!")
                     st.rerun()
         
-        if st.button("🗑️ Excluir Faturamento Selecionado", key="btn_del_fat", type="secondary"):
-            deletar_faturamento(fat_sel_id)
-            st.success("✅ Faturamento excluído!")
-            st.rerun()
+        from auth import pode_excluir
+        if pode_excluir():
+            if st.button("🗑️ Excluir Faturamento Selecionado", key="btn_del_fat", type="secondary"):
+                deletar_faturamento(fat_sel_id)
+                st.success("✅ Faturamento excluído!")
+                st.rerun()
 
 
 # ============================================================
@@ -591,10 +596,12 @@ def _render_custos():
                         st.success("✅ Custo atualizado!")
                         st.rerun()
         
-        if st.button("🗑️ Excluir Custo Selecionado", key="btn_del_custo", type="secondary"):
-            deletar_custo(custo_sel_id)
-            st.success("✅ Custo excluído!")
-            st.rerun()
+        from auth import pode_excluir as _pode_excluir_custo
+        if _pode_excluir_custo():
+            if st.button("🗑️ Excluir Custo Selecionado", key="btn_del_custo", type="secondary"):
+                deletar_custo(custo_sel_id)
+                st.success("✅ Custo excluído!")
+                st.rerun()
 
 
 # ============================================================
@@ -868,10 +875,12 @@ def _render_contas():
                     st.success("✅ Conta cancelada!")
                     st.rerun()
             with col_a4:
-                if st.button("🗑️", key=f"btn_del_conta_{conta['id']}", use_container_width=True):
-                    deletar_conta(conta['id'])
-                    st.success("✅ Conta excluída!")
-                    st.rerun()
+                from auth import pode_excluir as _pe_conta
+                if _pe_conta():
+                    if st.button("🗑️", key=f"btn_del_conta_{conta['id']}", use_container_width=True):
+                        deletar_conta(conta['id'])
+                        st.success("✅ Conta excluída!")
+                        st.rerun()
         
         st.markdown("---")
     
@@ -896,10 +905,12 @@ def _render_contas():
                     st.markdown(f"**Pagamento:** {pag_str or '—'}")
                     if conta.get('observacoes'):
                         st.markdown(f"**Obs:** {conta['observacoes']}")
-                if st.button("🗑️ Excluir Conta", key=f"btn_del_conta_fin_{conta['id']}"):
-                    deletar_conta(conta['id'])
-                    st.success("✅ Conta excluída!")
-                    st.rerun()
+                from auth import pode_excluir as _pe_conta_fin
+                if _pe_conta_fin():
+                    if st.button("🗑️ Excluir Conta", key=f"btn_del_conta_fin_{conta['id']}"):
+                        deletar_conta(conta['id'])
+                        st.success("✅ Conta excluída!")
+                        st.rerun()
 
 
 # ============================================================
