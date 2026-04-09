@@ -14,6 +14,9 @@ from utils import (
 
 
 def render():
+    from auth import verificar_acesso
+    if not verificar_acesso('importacao'):
+        return
     st.markdown(page_header("📥 Importação", "Importar produtos e notas fiscais"), unsafe_allow_html=True)
 
     tab1, tab2 = st.tabs(["📋 Importar Produtos (Excel)", "📄 Importar Notas Fiscais (DANFE)"])
