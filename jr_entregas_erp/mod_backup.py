@@ -299,9 +299,9 @@ def _render_importar():
                 disabled=not confirmar
             ):
                 # Validar senha
-                from auth import USERS
                 username = get_username()
-                if username not in USERS or USERS[username]["senha"] != senha_confirmacao:
+                user = database.verificar_senha(username, senha_confirmacao)
+                if user is None:
                     st.error("❌ Senha incorreta. Restauração cancelada.")
                     return
 
