@@ -3,13 +3,48 @@ import pandas as pd
 from styles import page_header, metric_card
 from database import (
     inserir_produtos, get_produtos, produto_existe,
-    inserir_nota, inserir_faturamento, nota_existe
+    inserir_nota, inserir_faturamento, nota_existe,
+    obter_clientes
 )
 from utils import (
     extrair_dados_danfe, buscar_cep, calcular_faturamento,
     validar_data, validar_cep, validar_numero_nota,
-    validar_quantidade, validar_dados_nota
+    validar_quantidade, validar_dados_nota,
+    formatar_cpf_cnpj
 )
+
+
+def _selecionar_cliente_cadastrado(label="👤 Cliente", key_suffix="", placeholder="(Nenhum)"):
+    """Renderiza seletor de cliente mostrando APENAS clientes cadastrados.
+    
+    Returns:
+        str: Nome do cliente selecionado ou string vazia.
+    """
+    clientes = obter_clientes(apenas_ativos=True)
+    
+    if not clientes:
+        st.warning("⚠️ Nenhum cliente cadastrado. Acesse **👥 Cadastros** para adicionar clientes.")
+        return ""
+    
+    opcoes = [placeholder]
+    mapa = {}
+    for c in clientes:
+        doc = formatar_cpf_cnpj(c.get('cpf_cnpj', '')) if c.get('cpf_cnpj') else ""
+        bairro = f" — {c.get('bairro', '')}" if c.get('bairro') else ""
+        label_cli = f"{c['nome']}{' | ' + doc if doc else ''}{bairro}"
+        opcoes.append(label_cli)
+        mapa[label_cli] = c['nome']
+    
+    selecionado = st.selectbox(
+        label,
+        opcoes,
+        key=f"select_cliente_{key_suffix}",
+    )
+    
+    if selecionado in mapa:
+        return mapa[selecionado]
+    
+    return ""
 
 
 def render():
@@ -158,12 +193,11 @@ def _render_nota_individual(uploaded_pdf, tipo_nota, produtos):
             if forcar:
                 duplicada = False
 
-    # Campo manual para nome do cliente
-    cliente_nome = st.text_input(
-        "👤 Nome do Cliente",
-        value="",
-        placeholder="Digite o nome do cliente (opcional)",
-        key="cliente_nota_input"
+    # Seleção de cliente cadastrado
+    cliente_nome = _selecionar_cliente_cadastrado(
+        label="👤 Cliente",
+        key_suffix="nota_individual",
+        placeholder="(Nenhum)"
     )
 
     bairro = ""
@@ -479,8 +513,8 @@ def _render_notas_batch(uploaded_pdfs, tipo_nota, produtos):
         ])
         st.dataframe(df_faltantes, use_container_width=True, hide_index=True)
 
-    # Campo para nome do cliente no modo batch
-    st.markdown("#### 👤 Nome do Cliente")
+    # Campo para seleção de cliente no modo batch
+    st.markdown("#### 👤 Selecionar Cliente")
     modo_cliente = st.radio(
         "Como deseja definir o cliente?",
         ["cliente_padrao", "cliente_individual"],
@@ -491,11 +525,10 @@ def _render_notas_batch(uploaded_pdfs, tipo_nota, produtos):
 
     cliente_padrao = ""
     if modo_cliente == "cliente_padrao":
-        cliente_padrao = st.text_input(
-            "Nome do Cliente (para todas as notas)",
-            value="",
-            placeholder="Digite o nome do cliente (opcional)",
-            key="batch_cliente_padrao"
+        cliente_padrao = _selecionar_cliente_cadastrado(
+            label="👤 Cliente (para todas as notas)",
+            key_suffix="batch_padrao",
+            placeholder="(Nenhum)"
         )
 
     # === LOG DETALHADO POR ARQUIVO ===
@@ -554,12 +587,12 @@ def _render_notas_batch(uploaded_pdfs, tipo_nota, produtos):
                 )
 
             if modo_cliente == "cliente_individual":
-                st.text_input(
-                    "👤 Nome do Cliente",
-                    value="",
-                    placeholder="Digite o nome do cliente (opcional)",
-                    key=f"batch_cliente_{idx}"
+                _cliente_nome = _selecionar_cliente_cadastrado(
+                    label="👤 Cliente",
+                    key_suffix=f"batch_{idx}",
+                    placeholder="(Nenhum)"
                 )
+                st.session_state[f"batch_cliente_{idx}"] = _cliente_nome or ""
 
             # Itens válidos
             st.markdown("---")
