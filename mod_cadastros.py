@@ -747,17 +747,18 @@ def _processar_importacao(df_editado: pd.DataFrame):
 
 def selecionar_cliente_autocomplete(key_prefix="", label="🔍 Cliente"):
     """Componente reutilizável de seleção de cliente com busca.
+    Mostra APENAS clientes cadastrados no banco de dados.
     Retorna o ID do cliente selecionado ou None.
     Pode ser usado em outros módulos (faturamento, custos, etc.)
     """
     clientes = database.obter_clientes(apenas_ativos=True)
     
     if not clientes:
-        st.caption("Nenhum cliente cadastrado.")
+        st.warning("⚠️ Nenhum cliente cadastrado. Acesse **👥 Cadastros** para adicionar clientes.")
         return None, ""
     
     # Criar opções formatadas
-    opcoes = ["(Nenhum / Digitar manualmente)"]
+    opcoes = ["(Nenhum)"]
     cliente_map = {}
     for c in clientes:
         doc = formatar_cpf_cnpj(c['cpf_cnpj']) if c['cpf_cnpj'] else ""
@@ -772,47 +773,10 @@ def selecionar_cliente_autocomplete(key_prefix="", label="🔍 Cliente"):
         key=f"{key_prefix}_autocomplete_cliente"
     )
     
-    if selecionado == "(Nenhum / Digitar manualmente)":
+    if selecionado == "(Nenhum)":
         return None, ""
     
     cliente = cliente_map.get(selecionado)
     if cliente:
         return cliente['id'], cliente['nome']
-    return None, ""
-
-
-def cadastro_rapido_cliente(key_prefix=""):
-    """Mini formulário para cadastro rápido de cliente inline.
-    Retorna (cliente_id, nome) se cadastrado, (None, '') caso contrário.
-    """
-    with st.expander("➕ Cadastrar Novo Cliente Rapidamente", expanded=False):
-        col1, col2 = st.columns(2)
-        with col1:
-            nome_rap = st.text_input("Nome *", key=f"{key_prefix}_nome_rapido", placeholder="Nome do cliente")
-            cpf_rap = st.text_input("CPF/CNPJ", key=f"{key_prefix}_cpf_rapido", placeholder="Opcional")
-        with col2:
-            tel_rap = st.text_input("Telefone", key=f"{key_prefix}_tel_rapido", placeholder="Opcional")
-            email_rap = st.text_input("E-mail", key=f"{key_prefix}_email_rapido", placeholder="Opcional")
-        
-        if st.button("💾 Cadastrar", key=f"{key_prefix}_btn_rapido", type="primary"):
-            if not nome_rap or not nome_rap.strip():
-                st.error("❌ Nome é obrigatório!")
-                return None, ""
-            
-            if cpf_rap:
-                ok, msg, tipo = validar_cpf_cnpj(cpf_rap)
-                if not ok:
-                    st.error(f"❌ {msg}")
-                    return None, ""
-            
-            sucesso, mensagem, cliente_id = database.inserir_cliente(
-                nome=nome_rap, cpf_cnpj=cpf_rap, telefone=tel_rap, email=email_rap
-            )
-            if sucesso:
-                st.success(f"✅ {mensagem}")
-                st.rerun()
-                return cliente_id, nome_rap
-            else:
-                st.error(f"❌ {mensagem}")
-    
     return None, ""
