@@ -53,7 +53,7 @@ def _construir_opcoes_cliente(placeholder="(Nenhum)", incluir_bairro=False):
 
 
 def _render_autocomplete_cliente(label="Cliente", key_suffix="", placeholder_nenhum="(Nenhum)", incluir_bairro=False):
-    """Renderiza campo de busca + seletor de cliente com autocomplete.
+    """Renderiza campo de busca + seletor de cliente APENAS com clientes cadastrados.
     
     Permite buscar clientes por nome ou CPF/CNPJ à medida que digita.
     Retorna (cliente_id, cliente_nome) ou (None, "") se nenhum selecionado.
@@ -80,6 +80,10 @@ def _render_autocomplete_cliente(label="Cliente", key_suffix="", placeholder_nen
         clientes_filtrados = buscar_clientes_autocomplete(busca.strip())
     else:
         clientes_filtrados = obter_clientes(apenas_ativos=True)
+    
+    if not clientes_filtrados:
+        st.warning("⚠️ Nenhum cliente cadastrado. Acesse **👥 Cadastros** para adicionar clientes.")
+        return None, ""
     
     # Construir opções
     opcoes = [placeholder_nenhum]
@@ -236,21 +240,12 @@ def _render_faturamento():
 
     # Autocomplete de cliente (fora do form para permitir busca dinâmica)
     st.markdown("###### 👤 Selecionar Cliente")
-    col_busca1, col_busca2 = st.columns([4, 2])
-    with col_busca1:
-        fat_cliente_id, fat_cliente_nome = _render_autocomplete_cliente(
-            label="Cliente",
-            key_suffix="faturamento",
-            placeholder_nenhum="(Nenhum - Digitar manualmente)",
-            incluir_bairro=True
-        )
-    with col_busca2:
-        fat_cliente_manual = st.text_input(
-            "👤 Cliente (manual)",
-            placeholder="Se não selecionou ao lado",
-            key="fat_cliente_manual_novo",
-            help="Use apenas se o cliente não está cadastrado no sistema"
-        )
+    fat_cliente_id, fat_cliente_nome = _render_autocomplete_cliente(
+        label="Cliente",
+        key_suffix="faturamento",
+        placeholder_nenhum="(Nenhum)",
+        incluir_bairro=True
+    )
 
     with st.form("form_novo_faturamento"):
         # Linha 1: Data e Descrição
@@ -312,9 +307,9 @@ def _render_faturamento():
             if not _validar_lancamento(fat_desc, fat_valor, "faturamento"):
                 pass  # Erros já exibidos pela função
             else:
-                # Determinar cliente (autocomplete tem prioridade sobre manual)
+                # Determinar cliente (apenas cadastrados)
                 cliente_id = fat_cliente_id
-                cliente_nome = fat_cliente_nome or fat_cliente_manual
+                cliente_nome = fat_cliente_nome
 
                 # Coletar custos associados
                 custos_assoc = []
@@ -439,7 +434,19 @@ def _render_faturamento():
                     ed_valor = st.number_input("Valor (R$)", value=float(fat_sel.get('valor', 0)), min_value=0.0, step=10.0, format="%.2f", key=f"ed_val_{fat_sel_id}")
                     ed_regiao = st.text_input("Região", value=fat_sel.get('regiao', ''), key=f"ed_reg_{fat_sel_id}")
                 with ce2:
-                    ed_cliente = st.text_input("Cliente", value=fat_sel.get('cliente', ''), key=f"ed_cli_{fat_sel_id}")
+                    # Seletor de cliente cadastrado na edição
+                    _clientes_edicao = obter_clientes(apenas_ativos=True)
+                    _opcoes_cli = ["(Nenhum)"] + [c['nome'] for c in _clientes_edicao]
+                    _cli_atual = fat_sel.get('cliente', '')
+                    _idx_cli = 0
+                    if _cli_atual:
+                        for _ic, _nc in enumerate(_opcoes_cli):
+                            if _nc == _cli_atual:
+                                _idx_cli = _ic
+                                break
+                    ed_cliente = st.selectbox("Cliente", options=_opcoes_cli, index=_idx_cli, key=f"ed_cli_{fat_sel_id}")
+                    if ed_cliente == "(Nenhum)":
+                        ed_cliente = ""
                     ed_veiculo = st.selectbox("Veículo", options=["Motoboy", "Carro", "Van", "Outro"],
                                               index=["Motoboy", "Carro", "Van", "Outro"].index(fat_sel.get('veiculo', 'Motoboy')) if fat_sel.get('veiculo') in ["Motoboy", "Carro", "Van", "Outro"] else 0,
                                               key=f"ed_veic_{fat_sel_id}")
@@ -483,7 +490,7 @@ def _render_custos():
     custo_cliente_id, custo_cliente_nome = _render_autocomplete_cliente(
         label="Cliente",
         key_suffix="custo",
-        placeholder_nenhum="(Nenhum - custo geral)"
+        placeholder_nenhum="(Nenhum — custo geral)"
     )
 
     with st.form("form_novo_custo"):
