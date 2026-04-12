@@ -1265,6 +1265,26 @@ def buscar_clientes_autocomplete(termo: str) -> List[Dict[str, Any]]:
     return [dict(r) for r in rows]
 
 
+def buscar_cliente_por_cnpj(cnpj: str) -> Optional[Dict[str, Any]]:
+    """Busca cliente ativo por CPF/CNPJ (apenas dígitos)."""
+    cnpj_limpo = re.sub(r'\D', '', str(cnpj)) if cnpj else ""
+    if not cnpj_limpo:
+        return None
+    with get_connection() as conn:
+        row = conn.execute("""
+            SELECT id, nome, cpf_cnpj, telefone, email, endereco, 
+                   bairro, cidade, cep, observacoes, data_cadastro, ativo 
+            FROM clientes WHERE cpf_cnpj = ? AND ativo = 1
+        """, (cnpj_limpo,)).fetchone()
+    return dict(row) if row else None
+
+
+def obter_dados_completos_cliente(cliente_id: int) -> Dict[str, Any]:
+    """Retorna todos os dados de um cliente por ID."""
+    result = buscar_cliente_por_id(cliente_id)
+    return result if result else {}
+
+
 def deletar_cliente(cliente_id: int) -> None:
     """Desativa um cliente (soft delete)."""
     return atualizar_cliente(cliente_id, ativo=0)
