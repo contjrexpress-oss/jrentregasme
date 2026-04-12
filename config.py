@@ -142,6 +142,11 @@ EMPRESA_TIPO_CONTA: str = "Corrente"
 # Mensagem padrão de encerramento PDF
 EMPRESA_MSG_ENCERRAMENTO: str = "Obrigado por contar com a JR ENTREGAS ME, sua melhor empresa de logística. Obrigada pela confiança e conte sempre conosco!"
 
+# ============ CLIENTE PADRÃO PARA IMPORTAÇÕES ============
+
+CLIENTE_PADRAO_CNPJ: str = "59369964000154"
+CLIENTE_PADRAO_NOME: str = "G GARRAFEIRA COMERCIO DE BEBIDAS E ALIMENTOS LTDA"
+
 # ============ CATEGORIAS DE CUSTOS PADRÃO ============
 
 CATEGORIAS_CUSTO_PADRAO: List[Tuple[str, str]] = [
