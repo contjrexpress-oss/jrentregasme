@@ -21,7 +21,7 @@ from database import (
 from auth import verificar_acesso, pode_excluir
 from utils import formatar_cpf_cnpj, formatar_moeda_br
 from utils_pdf import gerar_pdf_faturamento, gerar_pdf_custos, gerar_pdf_relatorio_financeiro
-from config import Cores
+from config import Cores, CLIENTE_PADRAO_CNPJ
 
 # Aliases para manter compatibilidade
 COR_AZUL = Cores.AZUL
@@ -37,19 +37,25 @@ COR_AZUL_MEDIO = Cores.AZUL_MEDIO
 
 def _construir_opcoes_cliente(placeholder="(Nenhum)", incluir_bairro=False):
     """Constrói lista de opções e mapa de clientes para selectbox.
-    Retorna (opcoes: list, mapa: dict).
+    Retorna (opcoes: list, mapa: dict, idx_padrao: int).
     Utiliza formatar_cpf_cnpj() de utils.py — elimina duplicação de formatação inline.
+    Pré-identifica o índice do cliente padrão (CLIENTE_PADRAO_CNPJ).
     """
     clientes = obter_clientes(apenas_ativos=True)
     opcoes = [placeholder]
     mapa = {}
-    for c in clientes:
+    idx_padrao = 0  # default: placeholder
+    for i, c in enumerate(clientes):
         doc = formatar_cpf_cnpj(c['cpf_cnpj']) if c.get('cpf_cnpj') else ""
         local = f" — {c.get('bairro', '')}" if incluir_bairro and c.get('bairro') else ""
         label = f"{c['nome']}{' | ' + doc if doc else ''}{local}"
         opcoes.append(label)
         mapa[label] = c
-    return opcoes, mapa
+        # Verificar se é o cliente padrão
+        cpf_cnpj_limpo = c.get('cpf_cnpj', '').replace('.', '').replace('/', '').replace('-', '')
+        if cpf_cnpj_limpo == CLIENTE_PADRAO_CNPJ:
+            idx_padrao = i + 1  # +1 por causa do placeholder
+    return opcoes, mapa, idx_padrao
 
 
 def _render_autocomplete_cliente(label="Cliente", key_suffix="", placeholder_nenhum="(Nenhum)", incluir_bairro=False):
@@ -88,21 +94,27 @@ def _render_autocomplete_cliente(label="Cliente", key_suffix="", placeholder_nen
     # Construir opções
     opcoes = [placeholder_nenhum]
     mapa = {}
-    for c in clientes_filtrados:
+    idx_padrao = 0  # default: placeholder
+    for i, c in enumerate(clientes_filtrados):
         doc = formatar_cpf_cnpj(c.get('cpf_cnpj', '')) if c.get('cpf_cnpj') else ""
         local = f" — {c.get('bairro', '')}" if incluir_bairro and c.get('bairro') else ""
         label_cli = f"{c['nome']}{' | ' + doc if doc else ''}{local}"
         opcoes.append(label_cli)
         mapa[label_cli] = c
+        # Verificar se é o cliente padrão
+        cpf_cnpj_limpo = c.get('cpf_cnpj', '').replace('.', '').replace('/', '').replace('-', '')
+        if cpf_cnpj_limpo == CLIENTE_PADRAO_CNPJ:
+            idx_padrao = i + 1  # +1 por causa do placeholder
     
     # Mostrar contador de resultados
     if busca and len(busca.strip()) >= 2:
         st.caption(f"📋 {len(clientes_filtrados)} cliente(s) encontrado(s)")
     
-    # Selectbox com resultados filtrados
+    # Selectbox com resultados filtrados e cliente padrão pré-selecionado
     selecionado = st.selectbox(
         f"👤 Selecione o {label}",
         opcoes,
+        index=idx_padrao,
         key=f"select_cliente_{key_suffix}",
     )
     
@@ -434,7 +446,7 @@ def _render_faturamento():
                     ed_valor = st.number_input("Valor (R$)", value=float(fat_sel.get('valor', 0)), min_value=0.0, step=10.0, format="%.2f", key=f"ed_val_{fat_sel_id}")
                     ed_regiao = st.text_input("Região", value=fat_sel.get('regiao', ''), key=f"ed_reg_{fat_sel_id}")
                 with ce2:
-                    # Seletor de cliente cadastrado na edição
+                    # Seletor de cliente cadastrado na edição (pré-seleciona atual ou padrão)
                     _clientes_edicao = obter_clientes(apenas_ativos=True)
                     _opcoes_cli = ["(Nenhum)"] + [c['nome'] for c in _clientes_edicao]
                     _cli_atual = fat_sel.get('cliente', '')
@@ -443,6 +455,13 @@ def _render_faturamento():
                         for _ic, _nc in enumerate(_opcoes_cli):
                             if _nc == _cli_atual:
                                 _idx_cli = _ic
+                                break
+                    # Se não há cliente atual, pré-selecionar o padrão
+                    if _idx_cli == 0 and not _cli_atual:
+                        for _ic2, _ce in enumerate(_clientes_edicao):
+                            cpj = _ce.get('cpf_cnpj', '').replace('.', '').replace('/', '').replace('-', '')
+                            if cpj == CLIENTE_PADRAO_CNPJ:
+                                _idx_cli = _ic2 + 1
                                 break
                     ed_cliente = st.selectbox("Cliente", options=_opcoes_cli, index=_idx_cli, key=f"ed_cli_{fat_sel_id}")
                     if ed_cliente == "(Nenhum)":
