@@ -15,6 +15,7 @@ from database import (
     cancelar_conta, deletar_conta, atualizar_status_contas_atrasadas,
     obter_clientes, buscar_cliente_por_id, buscar_clientes_autocomplete,
     inserir_custos_faturamento, get_custos_faturamento, get_lucro_por_faturamento,
+    atualizar_custo_faturamento, excluir_custo_faturamento, get_todos_custos_faturamento,
     buscar_descricoes_servicos, buscar_categorias_custos_texto,
     get_faturamento_por_cliente, get_custos_por_cliente,
 )
@@ -437,6 +438,43 @@ def _render_faturamento():
                 for ca in custos_assoc:
                     st.caption(f"  • {ca['descricao']}: {formatar_moeda_br(ca['valor'])}")
 
+    # Edição e exclusão de custos associados ao faturamento selecionado
+    if fat_sel:
+        custos_assoc = get_custos_faturamento(fat_sel_id)
+        if custos_assoc:
+            with st.expander(f"💸 Editar/Excluir Custos Associados ({len(custos_assoc)})", expanded=False):
+                for idx_ca, ca in enumerate(custos_assoc):
+                    st.markdown(f"**Custo #{ca['id']}** — {ca['descricao']}: {formatar_moeda_br(ca['valor'])}")
+                    col_e1, col_e2, col_e3, col_e4 = st.columns([3, 2, 2, 1])
+                    with col_e1:
+                        new_desc = st.text_input("Descrição", value=ca.get('descricao', ''),
+                                                 key=f"cf_desc_{ca['id']}")
+                    with col_e2:
+                        new_val = st.number_input("Valor (R$)", value=float(ca.get('valor', 0)),
+                                                  min_value=0.0, step=5.0, format="%.2f",
+                                                  key=f"cf_val_{ca['id']}")
+                    with col_e3:
+                        new_cat = st.text_input("Categoria", value=ca.get('categoria', ''),
+                                                key=f"cf_cat_{ca['id']}")
+                    with col_e4:
+                        st.markdown("<br>", unsafe_allow_html=True)
+                        if st.button("💾", key=f"cf_save_{ca['id']}", help="Salvar alterações"):
+                            if not new_desc.strip():
+                                st.error("❌ Descrição obrigatória.")
+                            elif new_val <= 0:
+                                st.error("❌ Valor deve ser maior que zero.")
+                            else:
+                                atualizar_custo_faturamento(ca['id'], descricao=new_desc.strip(),
+                                                            valor=new_val, categoria=new_cat.strip())
+                                st.success("✅ Custo associado atualizado!")
+                                st.rerun()
+                        if st.button("🗑️", key=f"cf_del_{ca['id']}", help="Excluir custo"):
+                            excluir_custo_faturamento(ca['id'])
+                            st.success("✅ Custo associado excluído!")
+                            st.rerun()
+                    if idx_ca < len(custos_assoc) - 1:
+                        st.markdown("---")
+
     if fat_sel:
         with st.expander("✏️ Editar este faturamento", expanded=False):
             with st.form(f"form_edit_fat_{fat_sel_id}"):
@@ -586,15 +624,52 @@ def _render_custos():
     st.markdown("---")
 
     custos = get_custos()
+    custos_fat = get_todos_custos_faturamento()
 
-    if not custos:
+    # Preparar custos associados para unificação
+    custos_fat_unificados = []
+    for cf in custos_fat:
+        custos_fat_unificados.append({
+            'id': f"CF-{cf['id']}",
+            'data': cf.get('data') or cf.get('fat_data', ''),
+            'descricao': cf['descricao'],
+            'categoria': cf.get('categoria', ''),
+            'valor': cf['valor'],
+            'cliente_nome': cf.get('cliente_nome') or cf.get('cliente', ''),
+            'origem': 'Faturamento',
+            'faturamento_id': cf['faturamento_id'],
+            'fat_descricao': cf.get('fat_descricao', ''),
+            '_cf_id': cf['id'],  # id real para edição
+        })
+
+    # Custos diretos com campo origem
+    custos_diretos = []
+    for c in custos:
+        c_copy = dict(c)
+        c_copy['origem'] = 'Direto'
+        c_copy['_cf_id'] = None
+        custos_diretos.append(c_copy)
+
+    todos_custos = custos_diretos + custos_fat_unificados
+
+    if not todos_custos:
         st.info("ℹ️ Nenhum custo registrado.")
         return
 
-    df = pd.DataFrame(custos)
+    df = pd.DataFrame(todos_custos)
 
     total_custos = df['valor'].sum()
     media_c = total_custos / len(df) if len(df) > 0 else 0
+
+    # Filtro por origem
+    filtro_origem = st.radio(
+        "📌 Filtrar por Origem", ["Todos", "Direto", "Faturamento"],
+        horizontal=True, key="filtro_origem_custos"
+    )
+    if filtro_origem != "Todos":
+        df = df[df['origem'] == filtro_origem]
+        total_custos = df['valor'].sum()
+        media_c = total_custos / len(df) if len(df) > 0 else 0
 
     # Métricas unificadas
     _render_metricas_resumo([
@@ -606,33 +681,35 @@ def _render_custos():
     st.markdown("---")
 
     # Tabela de custos unificada
-    cols_show = ['id', 'data', 'descricao', 'categoria', 'valor']
+    cols_show = ['id', 'data', 'descricao', 'categoria', 'valor', 'origem']
     if 'cliente_nome' in df.columns:
         cols_show.insert(3, 'cliente_nome')
 
     rename_cols = {
         'id': 'ID', 'data': 'Data', 'descricao': 'Descrição',
-        'categoria': 'Categoria', 'valor': 'Valor (R$)', 'cliente_nome': 'Cliente'
+        'categoria': 'Categoria', 'valor': 'Valor (R$)', 'cliente_nome': 'Cliente',
+        'origem': 'Origem',
     }
 
     if 'cliente_nome' in df.columns:
         df['cliente_nome'] = df['cliente_nome'].fillna('—')
 
     _render_tabela_dados(df, cols_show, rename_cols, column_config={
-        'ID': st.column_config.NumberColumn(width="small"),
+        'ID': st.column_config.TextColumn(width="small"),
         'Valor (R$)': st.column_config.NumberColumn(format="R$ %.2f", min_value=0),
     })
 
-    # Exportar PDF unificado
+    # Exportar PDF unificado (inclui custos associados)
     metricas_cus_pdf = {
         'total': total_custos,
         'registros': len(df),
     }
-    _render_export_pdf("Custos", gerar_pdf_custos, custos, metricas_cus_pdf,
+    _render_export_pdf("Custos", gerar_pdf_custos, todos_custos, metricas_cus_pdf,
                        "custos", "btn_export_cus_pdf")
 
-    # Edição e exclusão
-    st.markdown("##### ✏️ Editar / Excluir")
+    # Edição e exclusão de custos DIRETOS
+    st.markdown("##### ✏️ Editar / Excluir Custos Diretos")
+    st.caption("Para editar custos associados a faturamento, use a aba Faturamento.")
     col_btn1, col_btn2 = st.columns(2)
     with col_btn1:
         custo_sel_id, custo_sel = _render_seletor_item(custos, "custo", "custo")
@@ -982,7 +1059,22 @@ def _render_relatorios():
     st.markdown("#### 📊 Relatórios Financeiros")
 
     faturamento = get_faturamento()
-    custos = get_custos()
+    custos_diretos = get_custos()
+    custos_fat = get_todos_custos_faturamento()
+
+    # Unificar custos diretos + custos associados a faturamento
+    custos_unificados = list(custos_diretos)
+    for cf in custos_fat:
+        custos_unificados.append({
+            'id': f"CF-{cf['id']}",
+            'data': cf.get('data') or cf.get('fat_data', ''),
+            'descricao': cf['descricao'],
+            'categoria': cf.get('categoria', ''),
+            'valor': cf['valor'],
+            'cliente_nome': cf.get('cliente_nome') or cf.get('cliente', ''),
+            'origem': 'Faturamento',
+        })
+    custos = custos_unificados
 
     if not faturamento and not custos:
         st.info("ℹ️ Nenhum dado financeiro disponível para gerar relatórios.")
