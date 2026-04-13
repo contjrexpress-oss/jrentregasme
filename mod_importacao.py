@@ -4,7 +4,7 @@ from styles import page_header, metric_card
 from database import (
     inserir_produtos, get_produtos, produto_existe,
     inserir_nota, inserir_faturamento, nota_existe,
-    obter_clientes
+    obter_clientes, buscar_cliente_por_cnpj
 )
 from utils import (
     extrair_dados_danfe, buscar_cep, calcular_faturamento,
@@ -12,10 +12,12 @@ from utils import (
     validar_quantidade, validar_dados_nota,
     formatar_cpf_cnpj
 )
+from config import CLIENTE_PADRAO_CNPJ
 
 
 def _selecionar_cliente_cadastrado(label="👤 Cliente", key_suffix="", placeholder="(Nenhum)"):
     """Renderiza seletor de cliente mostrando APENAS clientes cadastrados.
+    Pré-seleciona o cliente padrão (G GARRAFEIRA) se existir no banco.
     
     Returns:
         str: Nome do cliente selecionado ou string vazia.
@@ -28,16 +30,23 @@ def _selecionar_cliente_cadastrado(label="👤 Cliente", key_suffix="", placehol
     
     opcoes = [placeholder]
     mapa = {}
-    for c in clientes:
+    idx_padrao = 0  # default: placeholder
+    
+    for i, c in enumerate(clientes):
         doc = formatar_cpf_cnpj(c.get('cpf_cnpj', '')) if c.get('cpf_cnpj') else ""
         bairro = f" — {c.get('bairro', '')}" if c.get('bairro') else ""
         label_cli = f"{c['nome']}{' | ' + doc if doc else ''}{bairro}"
         opcoes.append(label_cli)
         mapa[label_cli] = c['nome']
+        # Verificar se é o cliente padrão
+        cpf_cnpj_limpo = c.get('cpf_cnpj', '').replace('.', '').replace('/', '').replace('-', '')
+        if cpf_cnpj_limpo == CLIENTE_PADRAO_CNPJ:
+            idx_padrao = i + 1  # +1 porque placeholder é index 0
     
     selecionado = st.selectbox(
         label,
         opcoes,
+        index=idx_padrao,
         key=f"select_cliente_{key_suffix}",
     )
     
