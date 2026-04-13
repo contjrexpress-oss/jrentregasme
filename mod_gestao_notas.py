@@ -68,46 +68,77 @@ def _render_notas_processadas():
     if filtro_busca:
         df_filtrado = df_filtrado[df_filtrado['numero'].str.contains(filtro_busca, case=False, na=False)]
     
-    # Exportar PDF
+    # Exportar PDF com filtros
     from utils_pdf import gerar_pdf_notas_fiscais
-    from datetime import datetime as _dt_notas
+    from datetime import datetime as _dt_notas, date as _date_notas
     
-    # Preparar dados para PDF
-    notas_pdf = []
-    for _, nota_r in df_filtrado.iterrows():
-        itens_nota = get_itens_nota(nota_r['id'])
-        notas_pdf.append({
-            'numero': nota_r.get('numero', ''),
-            'data_nota': nota_r.get('data_nota', ''),
-            'tipo': nota_r.get('tipo', ''),
-            'total_unidades': nota_r.get('total_unidades', 0),
-            'cep': nota_r.get('cep', ''),
-            'bairro': nota_r.get('bairro', ''),
-            'municipio': nota_r.get('municipio', ''),
-            'itens': itens_nota or [],
-        })
-    
-    metricas_notas_pdf = {
-        'total': len(df_filtrado),
-        'entradas': len(df_filtrado[df_filtrado['tipo'] == 'entrada']),
-        'saidas': len(df_filtrado[df_filtrado['tipo'] == 'saida']),
-    }
-    
-    filtro_txt = []
-    if filtro_tipo != "Todas":
-        filtro_txt.append(f"Tipo: {filtro_tipo}")
-    if filtro_busca:
-        filtro_txt.append(f"Busca: {filtro_busca}")
-    
-    pdf_notas_buf = gerar_pdf_notas_fiscais(notas_pdf, metricas_notas_pdf, " | ".join(filtro_txt))
-    
-    st.download_button(
-        "📄 Exportar Notas em PDF",
-        data=pdf_notas_buf,
-        file_name=f"notas_fiscais_{_dt_notas.now().strftime('%Y%m%d_%H%M')}.pdf",
-        mime="application/pdf",
-        key="btn_export_notas_pdf"
-    )
+    with st.expander("📄 Exportar Notas em PDF", expanded=False):
+        st.caption("Filtre os dados antes de gerar o PDF.")
+        col_pdf1, col_pdf2 = st.columns(2)
+        with col_pdf1:
+            exp_notas_ini = st.date_input(
+                "📅 Data Início",
+                value=_date_notas(_date_notas.today().year, 1, 1),
+                key="exp_notas_data_ini"
+            )
+        with col_pdf2:
+            exp_notas_fim = st.date_input(
+                "📅 Data Fim",
+                value=_date_notas.today(),
+                key="exp_notas_data_fim"
+            )
+        
+        # Filtrar por período
+        df_pdf = df_filtrado.copy()
+        if 'data_nota' in df_pdf.columns:
+            df_pdf['_data_parsed'] = pd.to_datetime(df_pdf['data_nota'], format='mixed', dayfirst=True, errors='coerce')
+            mask = df_pdf['_data_parsed'].notna()
+            df_pdf = df_pdf[
+                mask & (df_pdf['_data_parsed'].dt.date >= exp_notas_ini) &
+                (df_pdf['_data_parsed'].dt.date <= exp_notas_fim)
+            ]
+        
+        # Preparar dados para PDF
+        notas_pdf = []
+        for _, nota_r in df_pdf.iterrows():
+            itens_nota = get_itens_nota(nota_r['id'])
+            notas_pdf.append({
+                'numero': nota_r.get('numero', ''),
+                'data_nota': nota_r.get('data_nota', ''),
+                'tipo': nota_r.get('tipo', ''),
+                'total_unidades': nota_r.get('total_unidades', 0),
+                'cep': nota_r.get('cep', ''),
+                'bairro': nota_r.get('bairro', ''),
+                'municipio': nota_r.get('municipio', ''),
+                'itens': itens_nota or [],
+            })
+        
+        metricas_notas_pdf = {
+            'total': len(df_pdf),
+            'entradas': len(df_pdf[df_pdf['tipo'] == 'entrada']) if not df_pdf.empty else 0,
+            'saidas': len(df_pdf[df_pdf['tipo'] == 'saida']) if not df_pdf.empty else 0,
+        }
+        
+        filtro_txt = [f"Período: {exp_notas_ini.strftime('%d/%m/%Y')} a {exp_notas_fim.strftime('%d/%m/%Y')}"]
+        if filtro_tipo != "Todas":
+            filtro_txt.append(f"Tipo: {filtro_tipo}")
+        if filtro_busca:
+            filtro_txt.append(f"Busca: {filtro_busca}")
+        
+        st.info(f"📊 {len(notas_pdf)} notas selecionadas")
+        
+        if notas_pdf:
+            pdf_notas_buf = gerar_pdf_notas_fiscais(notas_pdf, metricas_notas_pdf, " | ".join(filtro_txt))
+            
+            st.download_button(
+                "📥 Baixar Notas em PDF",
+                data=pdf_notas_buf,
+                file_name=f"notas_fiscais_{_dt_notas.now().strftime('%Y%m%d_%H%M')}.pdf",
+                mime="application/pdf",
+                key="btn_export_notas_pdf"
+            )
+        else:
+            st.warning("Nenhuma nota encontrada com os filtros selecionados.")
     
     st.markdown("---")
     
