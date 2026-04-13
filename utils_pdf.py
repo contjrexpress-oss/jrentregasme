@@ -736,17 +736,22 @@ def gerar_pdf_relatorio_financeiro(
     return _build_pdf(elements, "Relatório Financeiro", "Faturamento, custos e análise de lucro")
 
 
-def gerar_pdf_faturamento(dados_faturamento, metricas, cliente_dados=None):
+def gerar_pdf_faturamento(dados_faturamento, metricas, cliente_dados=None, filtros_texto="",
+                          mostrar_custos=False):
     """
     Gera PDF somente da tabela de faturamento.
     dados_faturamento: lista de dicts
-    metricas: dict com total, registros, media
+    metricas: dict com total, registros, media (e total_custos, lucro_liquido se mostrar_custos)
     cliente_dados: dict opcional com dados do cliente (nome, cpf_cnpj, etc.)
+    filtros_texto: texto descritivo dos filtros aplicados
+    mostrar_custos: se True, inclui custos associados e lucro líquido por faturamento
     """
     styles = _get_styles()
     elements = []
 
     elements.append(Paragraph("📈 Relatório de Faturamento", styles['TituloPrincipal']))
+    if filtros_texto:
+        elements.append(Paragraph(f"Filtros: {filtros_texto}", styles['Subtitulo']))
     elements.append(Spacer(1, 3 * mm))
 
     # Seção do cliente (se filtrado por cliente)
@@ -755,53 +760,130 @@ def gerar_pdf_faturamento(dados_faturamento, metricas, cliente_dados=None):
         elements.append(_separador())
 
     # Métricas
-    met_row = _criar_metricas_row([
+    metricas_lista = [
         {"label": "Total Faturamento", "valor": formatar_moeda_br(metricas.get('total', 0)), "cor": COR_VERDE},
         {"label": "Total Registros", "valor": str(metricas.get('registros', 0)), "cor": COR_AZUL},
         {"label": "Média por Nota", "valor": formatar_moeda_br(metricas.get('media', 0)), "cor": COR_LARANJA},
-    ], styles)
+    ]
+    if mostrar_custos:
+        metricas_lista.extend([
+            {"label": "Total Custos", "valor": formatar_moeda_br(metricas.get('total_custos', 0)), "cor": COR_VERMELHO},
+            {"label": "Lucro Líquido", "valor": formatar_moeda_br(metricas.get('lucro_liquido', 0)), "cor": COR_VERDE},
+        ])
+    met_row = _criar_metricas_row(metricas_lista, styles)
     elements.append(met_row)
     elements.append(Spacer(1, 5 * mm))
     elements.append(_separador())
 
-    colunas = ['ID', 'Data', 'Descrição', 'Região', 'Veículo', 'Cliente', 'CEP', 'Bairro', 'Valor (R$)']
+    # Tabela principal de faturamento
+    if mostrar_custos:
+        colunas = ['ID', 'Data', 'Descrição', 'Cliente', 'Valor (R$)', 'Custos (R$)', 'Lucro (R$)']
+    else:
+        colunas = ['ID', 'Data', 'Descrição', 'Região', 'Veículo', 'Cliente', 'CEP', 'Bairro', 'Valor (R$)']
+
     linhas = []
     for d in dados_faturamento:
-        linhas.append([
-            str(d.get('id', '')),
-            str(d.get('data', '')),
-            str(d.get('descricao', ''))[:35],
-            str(d.get('regiao', '')),
-            str(d.get('veiculo', '')),
-            str(d.get('cliente', ''))[:20],
-            str(d.get('cep', '')),
-            str(d.get('bairro', ''))[:15],
-            formatar_moeda_br(d.get('valor', 0)),
-        ])
+        if mostrar_custos:
+            linhas.append([
+                str(d.get('id', '')),
+                str(d.get('data', '')),
+                str(d.get('descricao', ''))[:40],
+                str(d.get('cliente', ''))[:25],
+                formatar_moeda_br(d.get('valor', 0)),
+                formatar_moeda_br(d.get('total_custos', 0)),
+                formatar_moeda_br(d.get('lucro_liquido', 0)),
+            ])
+        else:
+            linhas.append([
+                str(d.get('id', '')),
+                str(d.get('data', '')),
+                str(d.get('descricao', ''))[:35],
+                str(d.get('regiao', '')),
+                str(d.get('veiculo', '')),
+                str(d.get('cliente', ''))[:20],
+                str(d.get('cep', '')),
+                str(d.get('bairro', ''))[:15],
+                formatar_moeda_br(d.get('valor', 0)),
+            ])
 
-    col_w = [12 * mm, 22 * mm, 50 * mm, 30 * mm, 22 * mm, 35 * mm, 22 * mm, 30 * mm, 25 * mm]
+    if mostrar_custos:
+        col_w = [14 * mm, 22 * mm, 60 * mm, 45 * mm, 30 * mm, 30 * mm, 30 * mm]
+    else:
+        col_w = [12 * mm, 22 * mm, 50 * mm, 30 * mm, 22 * mm, 35 * mm, 22 * mm, 30 * mm, 25 * mm]
     tabela = criar_tabela_pdf(linhas, colunas, col_widths=col_w, styles=styles)
     elements.append(tabela)
 
     total = metricas.get('total', 0)
     elements.append(Spacer(1, 3 * mm))
-    elements.append(Paragraph(f"Total: {formatar_moeda_br(total)}", styles['TotalLinha']))
+    if mostrar_custos:
+        total_custos = metricas.get('total_custos', 0)
+        lucro = metricas.get('lucro_liquido', 0)
+        elements.append(Paragraph(
+            f"Total Faturamento: {formatar_moeda_br(total)} | "
+            f"Total Custos: {formatar_moeda_br(total_custos)} | "
+            f"Lucro Líquido: {formatar_moeda_br(lucro)}",
+            styles['TotalLinha']
+        ))
+
+        # Detalhamento de custos por faturamento
+        tem_custos_detalhe = any(d.get('custos_associados') for d in dados_faturamento)
+        if tem_custos_detalhe:
+            elements.append(Spacer(1, 5 * mm))
+            elements.append(_separador())
+            elements.append(Spacer(1, 3 * mm))
+            elements.append(Paragraph("📋 Detalhamento de Custos por Faturamento", styles['SecaoTitulo']))
+            elements.append(Spacer(1, 3 * mm))
+
+            for d in dados_faturamento:
+                custos_list = d.get('custos_associados', [])
+                if custos_list:
+                    fat_desc = f"ID {d.get('id', '')} - {str(d.get('descricao', ''))[:50]}"
+                    elements.append(Paragraph(
+                        f"<b>{fat_desc}</b> (Valor: {formatar_moeda_br(d.get('valor', 0))})",
+                        styles['Normal']
+                    ))
+                    elements.append(Spacer(1, 1 * mm))
+
+                    custos_colunas = ['Descrição', 'Categoria', 'Valor (R$)']
+                    custos_linhas = []
+                    for c in custos_list:
+                        custos_linhas.append([
+                            str(c.get('descricao', ''))[:45],
+                            str(c.get('categoria', ''))[:25],
+                            formatar_moeda_br(c.get('valor', 0)),
+                        ])
+                    custos_col_w = [80 * mm, 50 * mm, 30 * mm]
+                    tab_custos = criar_tabela_pdf(custos_linhas, custos_colunas,
+                                                  col_widths=custos_col_w, styles=styles)
+                    elements.append(tab_custos)
+
+                    elements.append(Paragraph(
+                        f"&nbsp;&nbsp;Total Custos: {formatar_moeda_br(d.get('total_custos', 0))} | "
+                        f"Lucro Líquido: {formatar_moeda_br(d.get('lucro_liquido', 0))}",
+                        styles['Normal']
+                    ))
+                    elements.append(Spacer(1, 3 * mm))
+    else:
+        elements.append(Paragraph(f"Total: {formatar_moeda_br(total)}", styles['TotalLinha']))
 
     return _build_pdf(elements, "Relatório de Faturamento", "Detalhamento completo de faturamento",
                       pagesize=landscape(A4))
 
 
-def gerar_pdf_custos(dados_custos, metricas, cliente_dados=None):
+def gerar_pdf_custos(dados_custos, metricas, cliente_dados=None, filtros_texto=""):
     """
     Gera PDF da tabela de custos.
     dados_custos: lista de dicts
     metricas: dict com total, registros
     cliente_dados: dict opcional com dados do cliente (nome, cpf_cnpj, etc.)
+    filtros_texto: texto descritivo dos filtros aplicados
     """
     styles = _get_styles()
     elements = []
 
     elements.append(Paragraph("📉 Relatório de Custos", styles['TituloPrincipal']))
+    if filtros_texto:
+        elements.append(Paragraph(f"Filtros: {filtros_texto}", styles['Subtitulo']))
     elements.append(Spacer(1, 3 * mm))
 
     # Seção do cliente (se filtrado por cliente)
