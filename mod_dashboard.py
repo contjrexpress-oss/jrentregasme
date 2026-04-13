@@ -7,7 +7,7 @@ import plotly.graph_objects as go
 from styles import page_header, metric_card
 from database import (get_notas, get_produtos, get_faturamento, get_custos, get_estoque,
                       obter_produtos_estoque_baixo, obter_contas_proximas_vencimento,
-                      atualizar_status_contas_atrasadas)
+                      atualizar_status_contas_atrasadas, get_todos_custos_faturamento)
 from config import Cores
 from utils import formatar_moeda_br
 
@@ -54,7 +54,19 @@ def _carregar_dados():
     notas = get_notas()
     produtos = get_produtos()
     faturamento = get_faturamento()
-    custos = get_custos()
+    custos_diretos = get_custos()
+    custos_fat = get_todos_custos_faturamento()
+    # Unificar custos diretos + custos associados a faturamento
+    custos = list(custos_diretos)
+    for cf in custos_fat:
+        custos.append({
+            'id': f"CF-{cf['id']}",
+            'data': cf.get('data') or cf.get('fat_data', ''),
+            'descricao': cf['descricao'],
+            'categoria': cf.get('categoria', ''),
+            'valor': cf['valor'],
+            'origem': 'Faturamento',
+        })
     estoque = get_estoque()
 
     hoje = datetime.now()
