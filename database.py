@@ -300,9 +300,15 @@ def init_db() -> None:
                 descricao TEXT NOT NULL,
                 valor REAL NOT NULL,
                 categoria TEXT DEFAULT '',
+                data TEXT DEFAULT '',
                 FOREIGN KEY (faturamento_id) REFERENCES faturamento(id) ON DELETE CASCADE
             )
         """)
+        # Migração: adicionar coluna data em custos_faturamento (se não existir)
+        try:
+            c.execute("SELECT data FROM custos_faturamento LIMIT 1")
+        except sqlite3.OperationalError:
+            c.execute("ALTER TABLE custos_faturamento ADD COLUMN data TEXT DEFAULT ''")
 
         
         # ============ FASE 8: TABELA DE USUÁRIOS ============
@@ -872,9 +878,52 @@ def inserir_custos_faturamento(faturamento_id: int, custos_lista: List[Dict[str,
 def get_custos_faturamento(faturamento_id: int) -> List[Dict[str, Any]]:
     with get_connection() as conn:
         rows = conn.execute("""
-            SELECT id, faturamento_id, descricao, valor, categoria 
+            SELECT id, faturamento_id, descricao, valor, categoria, data 
             FROM custos_faturamento WHERE faturamento_id = ? ORDER BY id
         """, (faturamento_id,)).fetchall()
+    return [dict(r) for r in rows]
+
+def atualizar_custo_faturamento(custo_id: int, descricao: str = None, valor: float = None,
+                                 categoria: str = None, data: str = None) -> None:
+    """Atualiza custo associado ao faturamento."""
+    with get_connection() as conn:
+        updates = []
+        params = []
+        if descricao is not None:
+            updates.append("descricao = ?")
+            params.append(descricao)
+        if valor is not None:
+            updates.append("valor = ?")
+            params.append(valor)
+        if categoria is not None:
+            updates.append("categoria = ?")
+            params.append(categoria)
+        if data is not None:
+            updates.append("data = ?")
+            params.append(data)
+        if updates:
+            params.append(custo_id)
+            conn.execute(f"UPDATE custos_faturamento SET {', '.join(updates)} WHERE id = ?", params)
+            conn.commit()
+
+def excluir_custo_faturamento(custo_id: int) -> None:
+    """Exclui custo associado ao faturamento."""
+    with get_connection() as conn:
+        conn.execute("DELETE FROM custos_faturamento WHERE id = ?", (custo_id,))
+        conn.commit()
+
+def get_todos_custos_faturamento() -> List[Dict[str, Any]]:
+    """Retorna TODOS os custos associados a faturamentos, com dados do faturamento pai."""
+    with get_connection() as conn:
+        rows = conn.execute("""
+            SELECT cf.id, cf.faturamento_id, cf.descricao, cf.valor, cf.categoria, cf.data,
+                   f.data as fat_data, f.descricao as fat_descricao, f.cliente, f.cliente_id,
+                   cl.nome as cliente_nome
+            FROM custos_faturamento cf
+            LEFT JOIN faturamento f ON cf.faturamento_id = f.id
+            LEFT JOIN clientes cl ON f.cliente_id = cl.id
+            ORDER BY COALESCE(NULLIF(cf.data, ''), f.data) DESC
+        """).fetchall()
     return [dict(r) for r in rows]
 
 def get_lucro_por_faturamento() -> List[Dict[str, Any]]:
