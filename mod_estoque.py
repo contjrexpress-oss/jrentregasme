@@ -964,13 +964,45 @@ def _render_relatorio(df):
         
         filtros_str = ", ".join(filtro_rel) if filtro_rel else "Todos"
         
-        pdf_buffer = gerar_pdf_relatorio_estoque(dados_pdf, metricas_pdf, filtros_aplicados=filtros_str)
-        
-        nome_arquivo = f"relatorio_estoque_{_dt.now().strftime('%Y%m%d_%H%M')}.pdf"
-        st.download_button(
-            "📄 Baixar Relatório em PDF",
-            data=pdf_buffer,
-            file_name=nome_arquivo,
-            mime="application/pdf",
-            key="btn_export_relatorio_pdf"
-        )
+        # Filtros adicionais para exportação PDF
+        with st.expander("📄 Exportar Estoque em PDF", expanded=False):
+            st.caption("Filtros de status já aplicados acima.")
+            
+            exp_busca_prod = st.text_input(
+                "🔍 Filtrar por código/descrição do produto",
+                key="exp_estoque_busca_prod",
+                placeholder="Ex: P000058 ou nome do produto"
+            )
+            
+            dados_pdf_filtrado = list(dados_pdf)
+            if exp_busca_prod:
+                exp_busca_prod_lower = exp_busca_prod.lower()
+                dados_pdf_filtrado = [
+                    d for d in dados_pdf_filtrado
+                    if exp_busca_prod_lower in str(d.get('codigo', '')).lower()
+                    or exp_busca_prod_lower in str(d.get('descricao', '')).lower()
+                ]
+            
+            metricas_pdf_f = dict(metricas_pdf)
+            metricas_pdf_f['total'] = len(dados_pdf_filtrado)
+            
+            filtros_str_final = filtros_str
+            if exp_busca_prod:
+                filtros_str_final += f" | Busca: {exp_busca_prod}"
+            
+            st.info(f"📊 {len(dados_pdf_filtrado)} produtos selecionados")
+            
+            if dados_pdf_filtrado:
+                pdf_buffer = gerar_pdf_relatorio_estoque(
+                    dados_pdf_filtrado, metricas_pdf_f, filtros_aplicados=filtros_str_final
+                )
+                nome_arquivo = f"relatorio_estoque_{_dt.now().strftime('%Y%m%d_%H%M')}.pdf"
+                st.download_button(
+                    "📥 Baixar Relatório em PDF",
+                    data=pdf_buffer,
+                    file_name=nome_arquivo,
+                    mime="application/pdf",
+                    key="btn_export_relatorio_pdf"
+                )
+            else:
+                st.warning("Nenhum produto encontrado com os filtros.")
