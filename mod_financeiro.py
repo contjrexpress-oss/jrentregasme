@@ -150,16 +150,137 @@ def _validar_lancamento(descricao, valor, tipo_label="lançamento"):
     return True
 
 
-def _render_export_pdf(label, pdf_fn, dados, metricas, filename_prefix, key):
-    """Renderiza botão de download de PDF com padrão unificado."""
-    pdf_buf = pdf_fn(dados, metricas)
-    st.download_button(
-        f"📄 Exportar {label} em PDF",
-        data=pdf_buf,
-        file_name=f"{filename_prefix}_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf",
-        mime="application/pdf",
-        key=key
-    )
+def _render_export_pdf(label, pdf_fn, dados, metricas, filename_prefix, key,
+                       mostrar_opcao_custos=False):
+    """Renderiza expander com filtros de período/cliente e botão de download PDF.
+    
+    Args:
+        mostrar_opcao_custos: Se True, exibe checkbox para incluir/ocultar custos associados no PDF.
+    """
+    with st.expander(f"📄 Exportar {label} em PDF", expanded=False):
+        st.caption("Filtre os dados antes de gerar o PDF.")
+        col_f1, col_f2 = st.columns(2)
+        with col_f1:
+            exp_data_ini = st.date_input(
+                "📅 Data Início", value=date(date.today().year, 1, 1),
+                key=f"{key}_data_ini"
+            )
+        with col_f2:
+            exp_data_fim = st.date_input(
+                "📅 Data Fim", value=date.today(),
+                key=f"{key}_data_fim"
+            )
+
+        # Filtro por cliente
+        clientes_cadastrados = obter_clientes(apenas_ativos=True)
+        clientes_nomes = sorted([c['nome'] for c in clientes_cadastrados if c.get('nome')])
+        # Incluir clientes que aparecem nos dados mas não estão cadastrados
+        for d in dados:
+            nome = d.get('cliente') or d.get('cliente_nome') or ''
+            if nome.strip() and nome not in clientes_nomes:
+                clientes_nomes.append(nome)
+        clientes_nomes = sorted(set(clientes_nomes))
+
+        exp_clientes = st.multiselect(
+            "🏢 Filtrar por Cliente(s)",
+            options=clientes_nomes,
+            default=[],
+            placeholder="Todos os clientes",
+            key=f"{key}_clientes"
+        )
+
+        # Opção de incluir custos associados (apenas para faturamento)
+        incluir_custos = False
+        if mostrar_opcao_custos:
+            st.markdown("---")
+            st.subheader("💰 Opções de Exibição")
+            incluir_custos = st.checkbox(
+                "Incluir custos associados e lucro líquido no relatório",
+                value=True,
+                key=f"{key}_mostrar_custos",
+                help="Desmarque para gerar relatório apenas com faturamento (sem custos). "
+                     "Útil para relatórios enviados a clientes."
+            )
+            if incluir_custos:
+                st.info("ℹ️ O relatório incluirá custos associados e lucro líquido por faturamento.")
+            else:
+                st.warning("⚠️ O relatório mostrará apenas faturamento (sem custos).")
+
+        # Aplicar filtros nos dados
+        dados_filtrados = list(dados)
+        # Filtro por período
+        dados_filtrados_periodo = []
+        for d in dados_filtrados:
+            data_str = d.get('data', '')
+            if data_str:
+                try:
+                    dt = pd.to_datetime(data_str, format='mixed', dayfirst=True, errors='coerce')
+                    if pd.notna(dt):
+                        if dt.date() < exp_data_ini or dt.date() > exp_data_fim:
+                            continue
+                except Exception:
+                    pass
+            dados_filtrados_periodo.append(d)
+        dados_filtrados = dados_filtrados_periodo
+
+        # Filtro por cliente
+        if exp_clientes:
+            dados_filtrados = [
+                d for d in dados_filtrados
+                if (d.get('cliente') or d.get('cliente_nome') or '') in exp_clientes
+            ]
+
+        # Se custos habilitados, enriquecer dados com custos associados
+        if mostrar_opcao_custos and incluir_custos:
+            for d in dados_filtrados:
+                fat_id = d.get('id')
+                if fat_id:
+                    custos = get_custos_faturamento(fat_id)
+                    d['custos_associados'] = custos
+                    d['total_custos'] = sum(c.get('valor', 0) for c in custos)
+                    d['lucro_liquido'] = d.get('valor', 0) - d['total_custos']
+
+        # Recalcular métricas
+        metricas_f = dict(metricas)
+        total = sum(d.get('valor', 0) for d in dados_filtrados)
+        metricas_f['total'] = total
+        metricas_f['registros'] = len(dados_filtrados)
+        if len(dados_filtrados) > 0:
+            metricas_f['media'] = total / len(dados_filtrados)
+
+        # Se custos habilitados, adicionar métricas de custos
+        if mostrar_opcao_custos and incluir_custos:
+            total_custos = sum(d.get('total_custos', 0) for d in dados_filtrados)
+            metricas_f['total_custos'] = total_custos
+            metricas_f['lucro_liquido'] = total - total_custos
+
+        st.info(f"📊 {len(dados_filtrados)} registros selecionados — Total: {formatar_moeda_br(total)}")
+
+        # Montar texto dos filtros para o PDF
+        filtros_txt = f"{exp_data_ini.strftime('%d/%m/%Y')} a {exp_data_fim.strftime('%d/%m/%Y')}"
+        if exp_clientes:
+            filtros_txt += f" | Clientes: {', '.join(exp_clientes)}"
+
+        if dados_filtrados:
+            # Passar mostrar_custos apenas para faturamento
+            if mostrar_opcao_custos:
+                if incluir_custos:
+                    filtros_txt += " | Relatório Completo (com custos)"
+                else:
+                    filtros_txt += " | Relatório Simplificado (sem custos)"
+                pdf_buf = pdf_fn(dados_filtrados, metricas_f, filtros_texto=filtros_txt,
+                                 mostrar_custos=incluir_custos)
+            else:
+                pdf_buf = pdf_fn(dados_filtrados, metricas_f, filtros_texto=filtros_txt)
+            st.download_button(
+                f"📥 Baixar {label} em PDF",
+                data=pdf_buf,
+                file_name=f"{filename_prefix}_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf",
+                mime="application/pdf",
+                key=f"{key}_download"
+            )
+        else:
+            st.warning("Nenhum registro encontrado com os filtros selecionados.")
 
 
 def _render_seletor_item(items, tipo_label, key_prefix):
@@ -422,7 +543,7 @@ def _render_faturamento():
         'media': media,
     }
     _render_export_pdf("Faturamento", gerar_pdf_faturamento, faturamento, metricas_fat_pdf,
-                       "faturamento", "btn_export_fat_pdf")
+                       "faturamento", "btn_export_fat_pdf", mostrar_opcao_custos=True)
 
     # Edição e exclusão
     st.markdown("##### ✏️ Editar / Excluir")
