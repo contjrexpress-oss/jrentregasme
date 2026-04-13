@@ -629,13 +629,15 @@ def _render_custos():
     # Preparar custos associados para unificação
     custos_fat_unificados = []
     for cf in custos_fat:
+        # Preferir nome do faturamento (texto) pois é consistente com filtros
+        nome_cliente = cf.get('cliente', '') or cf.get('cliente_nome', '') or ''
         custos_fat_unificados.append({
             'id': f"CF-{cf['id']}",
             'data': cf.get('data') or cf.get('fat_data', ''),
             'descricao': cf['descricao'],
             'categoria': cf.get('categoria', ''),
             'valor': cf['valor'],
-            'cliente_nome': cf.get('cliente_nome') or cf.get('cliente', ''),
+            'cliente_nome': nome_cliente,
             'origem': 'Faturamento',
             'faturamento_id': cf['faturamento_id'],
             'fat_descricao': cf.get('fat_descricao', ''),
@@ -1065,13 +1067,15 @@ def _render_relatorios():
     # Unificar custos diretos + custos associados a faturamento
     custos_unificados = list(custos_diretos)
     for cf in custos_fat:
+        # Preferir nome do faturamento (texto) pois é o mesmo usado no filtro de clientes
+        nome_cliente = cf.get('cliente', '') or cf.get('cliente_nome', '') or ''
         custos_unificados.append({
             'id': f"CF-{cf['id']}",
             'data': cf.get('data') or cf.get('fat_data', ''),
             'descricao': cf['descricao'],
             'categoria': cf.get('categoria', ''),
             'valor': cf['valor'],
-            'cliente_nome': cf.get('cliente_nome') or cf.get('cliente', ''),
+            'cliente_nome': nome_cliente,
             'origem': 'Faturamento',
         })
     custos = custos_unificados
@@ -1123,7 +1127,7 @@ def _render_relatorios():
         df_fat = df_fat[df_fat['cliente'].isin(clientes_selecionados)]
 
     if not df_cus.empty:
-        df_cus['data_parsed'] = pd.to_datetime(df_cus['data'], errors='coerce')
+        df_cus['data_parsed'] = pd.to_datetime(df_cus['data'], format='mixed', dayfirst=True, errors='coerce')
         df_cus = df_cus[df_cus['data_parsed'].notna()]
         df_cus = df_cus[(df_cus['data_parsed'].dt.date >= data_inicio) & (df_cus['data_parsed'].dt.date <= data_fim)]
 
