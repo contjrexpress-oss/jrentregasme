@@ -818,18 +818,29 @@ def gerar_pdf_custos(dados_custos, metricas, cliente_dados=None):
     elements.append(Spacer(1, 5 * mm))
     elements.append(_separador())
 
-    colunas = ['ID', 'Data', 'Descrição', 'Categoria', 'Valor (R$)']
+    # Verificar se há coluna de origem (custos unificados)
+    tem_origem = any(d.get('origem') for d in dados_custos)
+    if tem_origem:
+        colunas = ['ID', 'Data', 'Descrição', 'Categoria', 'Valor (R$)', 'Origem']
+    else:
+        colunas = ['ID', 'Data', 'Descrição', 'Categoria', 'Valor (R$)']
     linhas = []
     for d in dados_custos:
-        linhas.append([
+        linha = [
             str(d.get('id', '')),
             str(d.get('data', '')),
             str(d.get('descricao', ''))[:45],
             str(d.get('categoria', ''))[:30],
             formatar_moeda_br(d.get('valor', 0)),
-        ])
+        ]
+        if tem_origem:
+            linha.append(str(d.get('origem', 'Direto')))
+        linhas.append(linha)
 
-    col_w = [14 * mm, 22 * mm, 60 * mm, 45 * mm, 28 * mm]
+    if tem_origem:
+        col_w = [14 * mm, 22 * mm, 50 * mm, 35 * mm, 28 * mm, 20 * mm]
+    else:
+        col_w = [14 * mm, 22 * mm, 60 * mm, 45 * mm, 28 * mm]
     tabela = criar_tabela_pdf(linhas, colunas, col_widths=col_w, styles=styles)
     elements.append(tabela)
 
